@@ -4,29 +4,6 @@ import numpy as np
 
 from gleams import config
 
-
-class DummyModel(nn.Module):
-    def __init__(self, filename: str = 'gleams.hdf5'):
-        super(DummyModel, self).__init__()
-        # Define the layers of your model here
-        self.filename = filename
-        self.siamese_model = None
-
-        self.layer1 = nn.Linear(in_features=128, out_features=64)
-        self.layer2 = nn.Linear(in_features=64, out_features=32)
-        self.layer3 = nn.Linear(in_features=32, out_features=1)
-
-    def forward(self, x):
-        x = torch.relu(self.layer1(x))
-        x = torch.relu(self.layer2(x))
-        x = self.layer3(x)
-        return x
-    
-    
-
-
-
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -166,20 +143,6 @@ class PyTorchModel(nn.Module):
                 nn.init.constant_(layer.bias, 0)  # Set biases to zero
     
 
-import numpy as np
-
-def transfer_weights(keras_model, pytorch_model):
-    keras_weights = keras_model.get_weights()
-    pytorch_model.precursor_dense32.weight.data = torch.tensor(keras_weights[0].T)
-    pytorch_model.precursor_dense32.bias.data = torch.tensor(keras_weights[1])
-    pytorch_model.precursor_dense5.weight.data = torch.tensor(keras_weights[2].T)
-    pytorch_model.precursor_dense5.bias.data = torch.tensor(keras_weights[3])
-    # Transfer other layers similarly...
-    # Note: You need to ensure the order of weights matches the PyTorch model's layers
-
-
-
-
 
 # Instantiate the PyTorch model
 pytorch_model = PyTorchModel()
@@ -187,8 +150,5 @@ pytorch_model = PyTorchModel()
 pytorch_model.initialize_dummy_weights()
 torch.save(pytorch_model.state_dict(), 'GLEAMS/data/gleams.pth')
 
-#import keras
-#keras_model = keras.models.load_model('GLEAMS/data/gleams.hdf5', compile=False)
-#transfer_weights(keras_model, pytorch_model)
 
     
