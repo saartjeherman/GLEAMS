@@ -1,8 +1,8 @@
 import os
 import sys
 
-from gleams.feature import spectrum
-
+#from gleams.feature import spectrum
+from feature import spectrum
 
 # Metadata processing and pair generation.
 model_filename = os.path.join(

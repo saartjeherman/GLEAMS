@@ -9,8 +9,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import scipy.sparse as ss
 
-from gleams.feature import encoder, spectrum
-from gleams.ms_io import ms_io
+#from gleams.feature import encoder, spectrum
+#from gleams.ms_io import ms_io
+from feature import encoder, spectrum
+from ms_io import ms_io
 
 
 logger = logging.getLogger('gleams')

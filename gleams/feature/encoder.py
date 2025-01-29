@@ -8,9 +8,10 @@ import numpy as np
 import scipy.sparse as ss
 from spectrum_utils.spectrum import MsmsSpectrum
 
-from gleams.feature import spectrum
-from gleams.ms_io import ms_io
-
+#from gleams.feature import spectrum
+#from gleams.ms_io import ms_io
+from feature import spectrum
+from ms_io import ms_io
 
 logger = logging.getLogger('gleams')
 

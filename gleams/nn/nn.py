@@ -11,8 +11,10 @@ import pyarrow.parquet as pq
 import scipy.sparse as ss
 from tensorflow.keras import backend as K
 
-from gleams.feature import encoder, feature
-from gleams.nn import data_generator, embedder
+#from gleams.feature import encoder, feature
+#from gleams.nn import data_generator, embedder
+from feature import encoder, feature
+from nn import data_generator, embedder
 
 
 logger = logging.getLogger('gleams')

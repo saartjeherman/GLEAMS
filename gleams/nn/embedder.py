@@ -13,8 +13,11 @@ from tensorflow.keras.layers import concatenate, Conv1D, Dense, Flatten, \
 from tensorflow.keras.models import Model
 from tensorflow_addons.optimizers import RectifiedAdam
 
-from gleams import config
-from gleams.nn import data_generator
+#from gleams import config
+#from gleams.nn import data_generator
+
+import config
+from nn import data_generator
 
 
 logger = logging.getLogger('gleams')
@@ -259,6 +262,7 @@ class Embedder:
             pool_size, pool_strides,
             name='fragment_block_5_pool')(fragment_layer)
         fragment_output = Flatten(name='fragment_flatten')(fragment_layer)
+        print("fragmentshape:", fragment_output.shape)
 
         # Reference spectra features are processed through a single
         # convolutional and max pooling layer.
@@ -386,6 +390,15 @@ class Embedder:
         np.ndarray
             The embeddings of the given samples.
         """
+        print("Encodings generator: ",encodings_generator)
+        print("encodings: ", encodings_generator.encodings.shape)
+        print("batch: ",encodings_generator.batch_size)
+        print("featrue:",encodings_generator.feature_split)
+        output = self._get_embedder_model().predict(encodings_generator)
+        print("Size of output: ", output.shape)
+        print("Embeddings predict: ", output)
+        print(type(output))
+
         return self._get_embedder_model().predict(encodings_generator)
 
 

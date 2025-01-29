@@ -11,20 +11,27 @@ os.environ['NUMEXPR_MAX_THREADS'] = str(max(os.cpu_count(), 64))
 os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
 import click
-import pandas as pd
+import pandas as pd # type: ignore
 
 # Initialize logging.
-from . import logger as glogger
+#from . import logger as glogger
+import logger as glogger
+
 glogger.init()
 # Initialize all random seeds before importing any packages.
-from . import rndm
+#from . import rndm
+import rndm
+
 rndm.set_seeds()
 
-from . import __version__
-from . import config
-from .cluster import cluster
-from .nn import nn
-
+#from . import __version__
+from __init__ import __version__
+#from . import config
+import config
+#from .cluster import cluster
+#from .nn import nn
+import cluster
+import nn
 
 logger = logging.getLogger('gleams')
 
@@ -62,10 +69,12 @@ def cli_embed(peak_in: List[str], embed_name: str) -> None:
     metadata_filename = os.path.join(temp_dir, f'{embed_name}.parquet')
     embed_dir = os.path.join(temp_dir, 'embed')
     os.mkdir(embed_dir)
+
     # Create a metadata file with the file names.
     metadata = pd.DataFrame({'filename': peak_in})
     metadata['dataset'] = 'GLEAMS'
     metadata.to_parquet(metadata_filename, index=False)
+    
     # Embed the spectra.
     precursor_encoding = {'num_bits_mz': config.num_bits_precursor_mz,
                           'mz_min': config.precursor_mz_min,
