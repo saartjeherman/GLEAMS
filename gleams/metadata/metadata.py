@@ -188,6 +188,7 @@ def download_massive_file(massive_filename: str, dir_name: str) -> None:
         The local directory where the file will be stored.
     """
     peak_filename = os.path.join(dir_name, massive_filename.rsplit('/', 1)[-1])
+    print(peak_filename)
     if not os.path.isfile(peak_filename):
         if not os.path.isdir(dir_name):
             try:
@@ -196,6 +197,7 @@ def download_massive_file(massive_filename: str, dir_name: str) -> None:
                 pass
         logger.debug('Download file %s', massive_filename)
         url = f'ftp://massive.ucsd.edu/{massive_filename}'
+        print("url: ", url)
         proc = subprocess.run(
             ['wget', '--no-verbose', '--timestamping', '--retry-connrefused',
              f'--directory-prefix={dir_name}', '--passive-ftp', url],
@@ -223,7 +225,9 @@ def download_massivekb_peaks(massivekb_filename: str, dir_name: str) -> None:
     filenames = (pd.read_csv(massivekb_filename, sep='\t',
                              usecols=['filename'])
                  .drop_duplicates('filename'))
-    datasets = filenames.str.split('/', 1).str[0]
+    #datasets = filenames.str.split('/', 1).str[0]
+    datasets = filenames['filename'].str.split('/', 1).str[0]
+    
     filenames['dir_name'] = datasets.apply(
         lambda dataset: os.path.join(dir_name, dataset))
     logger.info('Download peak files from MassIVE')
