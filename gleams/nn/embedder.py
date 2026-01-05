@@ -282,7 +282,7 @@ class Embedder:
                               kernel_initializer='lecun_normal',
                               activity_regularizer='l2', name='output')
                         (concatenate([precursor_dense5, fragment_output,
-                                      ref_spectra_output])))
+                                      ref_spectra_output]))) 
 
         return Model(inputs=[precursor_input, fragment_input,
                              ref_spectra_input],
@@ -390,15 +390,6 @@ class Embedder:
         np.ndarray
             The embeddings of the given samples.
         """
-        print("Encodings generator: ",encodings_generator)
-        print("encodings: ", encodings_generator.encodings.shape)
-        print("batch: ",encodings_generator.batch_size)
-        print("featrue:",encodings_generator.feature_split)
-        output = self._get_embedder_model().predict(encodings_generator)
-        print("Size of output: ", output.shape)
-        print("Embeddings predict: ", output)
-        print(type(output))
-
         return self._get_embedder_model().predict(encodings_generator)
 
 

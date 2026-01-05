@@ -120,6 +120,8 @@ class Embedder(nn.Module):
         strides = 1
         pool_size = 1
         pool_strides = 2
+
+        self.batch_size = config.batch_size
   
 
         # Precursor features dense layers
@@ -216,6 +218,7 @@ class Embedder(nn.Module):
         # Process reference spectra input
         ref_spectra_output = self.ref_spectra_dense_750(ref_spectra_input)
         ref_spectra_output = self.ref_spectra_output(ref_spectra_output)
+
 
         # Expand dimensions to match the batch size
         precursor_output = precursor_output.unsqueeze(0)
@@ -351,13 +354,13 @@ class Embedder(nn.Module):
 
         embeddings = []
         
-        # Iterate through batches from the generator
-        for batch in encodings_generator:  # batch is een lijst
+        for batch in encodings_generator:  
+            # print the dimensions of the batch
             precursor_inputs = batch[0]
             fragment_inputs = batch[1]
             ref_spectra_inputs = batch[2]
             batch_size = precursor_inputs.shape[0]
-            for i in range(batch_size):  # Itereer over elk item in de lijst
+            for i in range(batch_size):  
                 precursor_input = precursor_inputs[i]
                 fragment_input = fragment_inputs[i]
                 ref_spectra_input = ref_spectra_inputs[i]
@@ -376,8 +379,7 @@ class Embedder(nn.Module):
                 with torch.no_grad():  # Disable gradient tracking for inference
                     output = self.forward(precursor_input, fragment_input, ref_spectra_input)
                     embeddings.append(output.cpu().tolist())    
-            
-            break
+                
 
         # Concatenate all embeddings into a single numpy array
         return np.concatenate(embeddings, axis=0)

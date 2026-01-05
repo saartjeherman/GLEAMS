@@ -16,6 +16,7 @@ import scipy.sparse as ss
 from feature import encoder, feature
 from nn import data_generator
 from nn import embedder_torch as embedder
+#from depthcharge.components import ModelMixin, PeptideDecoder, SpectrumEncoder
 
 import torch
 import torch.nn as nn
@@ -26,12 +27,8 @@ logger = logging.getLogger('gleams')
 
 
 def train_nn(filename_model: str,
-             filename_feat_train: str,
              filenames_train_pairs_pos: List[str],
              filenames_train_pairs_neg: List[str],
-             filename_feat_val: str,
-             filenames_val_pairs_pos: List[str],
-             filenames_val_pairs_neg: List[str],
              embedder_config: Dict[str, Any],
              batch_size: int,
              num_epochs: int,
@@ -95,10 +92,12 @@ def train_nn(filename_model: str,
     feature_split = (embedder_config['num_precursor_features'],
                      embedder_config['num_precursor_features'] +
                      embedder_config['num_fragment_features'])
+    
     train_generator = data_generator.PairSequence(
         filename_feat_train, filenames_train_pairs_pos,
         filenames_train_pairs_neg, batch_size, feature_split,
         max_num_pairs_train)
+    
     validators = [
         data_generator.PairSequence(
             filename_feat_val, [filename_val_pairs_pos],
@@ -106,6 +105,7 @@ def train_nn(filename_model: str,
             max_num_pairs_val, False)
         for filename_val_pairs_pos, filename_val_pairs_neg in zip(
             filenames_val_pairs_pos, filenames_val_pairs_neg)]
+    
     emb.train(train_generator, steps_per_epoch, num_epochs, validators)
 
     logger.info('Save the trained GLEAMS neural network')

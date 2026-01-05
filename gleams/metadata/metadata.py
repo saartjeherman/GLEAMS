@@ -11,6 +11,7 @@ import numba as nb
 import numpy as np
 import pandas as pd
 from spectrum_utils import spectrum as sus
+#from spectrum_utils import fragment_annotation
 from spectrum_utils import utils as suu
 
 
@@ -187,8 +188,10 @@ def download_massive_file(massive_filename: str, dir_name: str) -> None:
     dir_name : str
         The local directory where the file will be stored.
     """
+    print("dir_name: ", dir_name)
+    print("massive_filename: ", massive_filename)
     peak_filename = os.path.join(dir_name, massive_filename.rsplit('/', 1)[-1])
-    print(peak_filename)
+    print("peak filename: ", peak_filename)
     if not os.path.isfile(peak_filename):
         if not os.path.isdir(dir_name):
             try:
@@ -196,7 +199,8 @@ def download_massive_file(massive_filename: str, dir_name: str) -> None:
             except OSError:
                 pass
         logger.debug('Download file %s', massive_filename)
-        url = f'ftp://massive.ucsd.edu/{massive_filename}'
+        #url = f'ftp://massive.ucsd.edu/{massive_filename}'
+        url = f'ftp://massive-ftp.ucsd.edu/{massive_filename}' 
         print("url: ", url)
         proc = subprocess.run(
             ['wget', '--no-verbose', '--timestamping', '--retry-connrefused',
@@ -225,8 +229,11 @@ def download_massivekb_peaks(massivekb_filename: str, dir_name: str) -> None:
     filenames = (pd.read_csv(massivekb_filename, sep='\t',
                              usecols=['filename'])
                  .drop_duplicates('filename'))
-    #datasets = filenames.str.split('/', 1).str[0]
-    datasets = filenames['filename'].str.split('/', 1).str[0]
+     #datasets = filenames.str.split('/', 1).str[0]
+    #datasets = filenames['filename'].str.split('/', 1).str[0]
+    datasets = filenames['filename'].str.split('/', n=1).str[0]
+
+    print(datasets)
     
     filenames['dir_name'] = datasets.apply(
         lambda dataset: os.path.join(dir_name, dataset))
@@ -363,9 +370,13 @@ def _get_theoretical_fragment_mzs(sequence: str) -> np.ndarray:
         mods[match.start() - mod_pos_offset] = float(match.group(0))
         mod_pos_offset += match.end() - match.start()
     # noinspection PyProtectedMember
+    #return np.asarray([fragment.calc_mz for fragment in
+    #                   fragment_annotation.get_theoretical_fragments(
+    #                       _remove_mod(sequence), mods)])
     return np.asarray([fragment.calc_mz for fragment in
                        sus._get_theoretical_peptide_fragments(
-                           _remove_mod(sequence), mods)])
+                          _remove_mod(sequence), mods)])
+
 
 
 @functools.lru_cache(None)
