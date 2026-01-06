@@ -56,8 +56,8 @@ BATCH_SIZE = 64              # Training batch size
 N_EPOCHS = 10                # Number of training epochs
 
 # Loss function
-CONTRASTIVE_MARGIN = 1.0     # Margin for contrastive loss (matching original GLEAMS CNN)
-LOSS_LABEL_CERTAINTY = 0.99  # Confidence in labels (handles noisy/uncertain positive pairs)
+CONTRASTIVE_MARGIN = 5.0     # Margin for contrastive loss (scaled for unnormalized embeddings with dim=128)
+LOSS_LABEL_CERTAINTY = 1.0   # Confidence in labels (1.0 = fully certain, <1.0 for noisy labels)
 
 # Learning rate scheduler
 SCHEDULER_PATIENCE = 2       # Epochs to wait before reducing LR

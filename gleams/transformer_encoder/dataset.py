@@ -98,6 +98,7 @@ class SpectraDataset(Dataset):
         self.precursor_mz_data = np.array(precursor_mz_list, dtype=np.float32)
         self.precursor_charge_data = np.array(precursor_charge_list, dtype=np.float32)
         self.identifiers = identifier_list  # Needed for pair remapping
+        print(f"✓ Loaded {len(self.identifiers):,} spectra")
         
         self.n_spectra = len(mz_list)
         self.max_peaks = max_peaks

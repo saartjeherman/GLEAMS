@@ -109,13 +109,10 @@ class ContrastiveLoss(nn.Module):
         Returns:
             Mean contrastive loss
         """
-        # L2 normalize embeddings to bound distances in [0, 2]
-        # This is CRITICAL for margin=1.0 to work properly
-        output1_normalized = torch.nn.functional.normalize(output1, p=2, dim=1)
-        output2_normalized = torch.nn.functional.normalize(output2, p=2, dim=1)
-        
-        # Compute Euclidean distance between normalized embeddings
-        euclidean_distance = torch.nn.functional.pairwise_distance(output1_normalized, output2_normalized)
+        # Compute Euclidean distance on RAW embeddings (no normalization)
+        # The original GLEAMS CNN does NOT normalize embeddings before computing distance
+        # Normalization forces embeddings onto a unit sphere, causing clustering issues
+        euclidean_distance = torch.nn.functional.pairwise_distance(output1, output2)
         
         # Positive pairs: use ramp function to cap at margin
         # This forces similar pairs to have distance < margin
@@ -126,7 +123,24 @@ class ContrastiveLoss(nn.Module):
         margin_square = torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
         
         # Combine with label certainty weighting
+        # For positive pairs (label=1): loss = label_certainty * min(distance, margin)²
+        # For negative pairs (label=0): loss = (1 - 0) * max(0, margin - distance)² = full penalty
         loss = (label * self.label_certainty * ramp_square + 
                 (1 - label * self.label_certainty) * margin_square)
+        
+        # Debug: Print first batch statistics (only once to avoid spam)
+        if not hasattr(self, '_debug_printed'):
+            pos_mask = label == 1
+            neg_mask = label == 0
+            if pos_mask.any() and neg_mask.any():
+                print(f"\n🔍 Loss function debug (first batch):")
+                print(f"   Margin: {self.margin}, Label certainty: {self.label_certainty}")
+                print(f"   Positive distances: mean={euclidean_distance[pos_mask].mean():.4f}, "
+                      f"loss={loss[pos_mask].mean():.4f}")
+                print(f"   Negative distances: mean={euclidean_distance[neg_mask].mean():.4f}, "
+                      f"loss={loss[neg_mask].mean():.4f}")
+                print(f"   Positive weight: {self.label_certainty}")
+                print(f"   Negative weight: 1.0 (full penalty)\n")
+            self._debug_printed = True
         
         return loss.mean()

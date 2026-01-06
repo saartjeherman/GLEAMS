@@ -291,11 +291,32 @@ def train_model(args):
 
                     emb1 = emb1_full[:, 0, :]
                     emb2 = emb2_full[:, 0, :]
+                    
+                    # Debug: Check embedding statistics on first batch
+                    if batch_idx == 0 and epoch == 1:
+                        print(f"\n🔍 Embedding diagnostics (first batch):")
+                        print(f"   Embedding shape: {emb1.shape}")
+                        print(f"   Emb1 - mean: {emb1.mean():.4f}, std: {emb1.std():.4f}, "
+                              f"norm: {torch.norm(emb1, dim=1).mean():.4f}")
+                        print(f"   Emb2 - mean: {emb2.mean():.4f}, std: {emb2.std():.4f}, "
+                              f"norm: {torch.norm(emb2, dim=1).mean():.4f}")
+                        print(f"   Full output shape: {emb1_full.shape}")
+                        print(f"   Global token (idx 0) used for embeddings\n")
 
                     loss = criterion(emb1, emb2, labels)
 
                     optimizer.zero_grad()
                     loss.backward()
+                    
+                    # Debug: Check gradients on first batch
+                    if batch_idx == 0 and epoch == 1:
+                        grad_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), float('inf'))
+                        print(f"   Gradient norm: {grad_norm:.4f}")
+                        # Check if embeddings have gradients
+                        if emb1.grad is not None:
+                            print(f"   Emb1 grad norm: {emb1.grad.norm():.4f}")
+                        print()
+                    
                     optimizer.step()
 
                     loss_value = float(loss.item())
@@ -306,10 +327,13 @@ def train_model(args):
                     # Track embedding distances every 100 batches to debug learning
                     if batch_idx % 100 == 0:
                         with torch.no_grad():
-                            # L2 normalize before computing distances (matching loss function)
-                            emb1_norm = torch.nn.functional.normalize(emb1, p=2, dim=1)
-                            emb2_norm = torch.nn.functional.normalize(emb2, p=2, dim=1)
-                            distances = torch.nn.functional.pairwise_distance(emb1_norm, emb2_norm)
+                            # Use raw embeddings (no normalization, matching loss function)
+                            distances = torch.nn.functional.pairwise_distance(emb1, emb2)
+                            
+                            # Also track embedding norms to detect collapse
+                            emb1_norm = torch.norm(emb1, dim=1).mean().item()
+                            emb2_norm = torch.norm(emb2, dim=1).mean().item()
+                            
                             pos_mask = labels == 1
                             neg_mask = labels == 0
                             if pos_mask.any():
@@ -325,7 +349,8 @@ def train_model(args):
                         'loss': f'{loss_value:.4f}', 
                         'avg_loss': f'{epoch_train_loss/n_train_batches:.4f}',
                         'pos_d': f'{pos_dist:.2f}' if batch_idx % 100 == 0 and not np.isnan(pos_dist) else '',
-                        'neg_d': f'{neg_dist:.2f}' if batch_idx % 100 == 0 and not np.isnan(neg_dist) else ''
+                        'neg_d': f'{neg_dist:.2f}' if batch_idx % 100 == 0 and not np.isnan(neg_dist) else '',
+                        'norm': f'{emb1_norm:.1f}' if batch_idx % 100 == 0 else ''
                     })
 
                     if log_batch_level:
