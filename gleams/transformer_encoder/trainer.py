@@ -306,7 +306,10 @@ def train_model(args):
                     # Track embedding distances every 100 batches to debug learning
                     if batch_idx % 100 == 0:
                         with torch.no_grad():
-                            distances = torch.nn.functional.pairwise_distance(emb1, emb2)
+                            # L2 normalize before computing distances (matching loss function)
+                            emb1_norm = torch.nn.functional.normalize(emb1, p=2, dim=1)
+                            emb2_norm = torch.nn.functional.normalize(emb2, p=2, dim=1)
+                            distances = torch.nn.functional.pairwise_distance(emb1_norm, emb2_norm)
                             pos_mask = labels == 1
                             neg_mask = labels == 0
                             if pos_mask.any():

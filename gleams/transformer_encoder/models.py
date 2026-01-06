@@ -109,8 +109,13 @@ class ContrastiveLoss(nn.Module):
         Returns:
             Mean contrastive loss
         """
-        # Compute Euclidean distance
-        euclidean_distance = torch.nn.functional.pairwise_distance(output1, output2)
+        # L2 normalize embeddings to bound distances in [0, 2]
+        # This is CRITICAL for margin=1.0 to work properly
+        output1_normalized = torch.nn.functional.normalize(output1, p=2, dim=1)
+        output2_normalized = torch.nn.functional.normalize(output2, p=2, dim=1)
+        
+        # Compute Euclidean distance between normalized embeddings
+        euclidean_distance = torch.nn.functional.pairwise_distance(output1_normalized, output2_normalized)
         
         # Positive pairs: use ramp function to cap at margin
         # This forces similar pairs to have distance < margin

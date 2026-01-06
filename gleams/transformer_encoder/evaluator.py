@@ -71,8 +71,10 @@ def evaluate_contrastive(
                 emb1 = emb1_full[:, 0, :]
                 emb2 = emb2_full[:, 0, :]
 
-                # Calculate distances for analysis
-                euclidean_distance = torch.nn.functional.pairwise_distance(emb1, emb2)
+                # Calculate distances for analysis (with L2 normalization matching loss function)
+                emb1_norm = torch.nn.functional.normalize(emb1, p=2, dim=1)
+                emb2_norm = torch.nn.functional.normalize(emb2, p=2, dim=1)
+                euclidean_distance = torch.nn.functional.pairwise_distance(emb1_norm, emb2_norm)
                 distances.extend(euclidean_distance.cpu().numpy().tolist())
                 labels_all.extend(labels.cpu().numpy().tolist())
 
