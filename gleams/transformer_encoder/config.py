@@ -38,11 +38,11 @@ FINAL_MODEL_FILE = 'final_model.pt'
 # =============================================================================
 
 # Transformer encoder dimensions
-DIM_MODEL = 256              # Model embedding dimension
+DIM_MODEL = 128              # Model embedding dimension (reduced from 256 to match original CNN scale)
 N_HEAD = 4                   # Number of attention heads
 DIM_FEEDFORWARD = 512        # Feedforward network dimension
 N_LAYERS = 2                 # Number of transformer layers
-DROPOUT = 0.3                # Dropout rate for regularization
+DROPOUT = 0.1                # Dropout rate for regularization
 
 
 # =============================================================================
@@ -56,7 +56,8 @@ BATCH_SIZE = 64              # Training batch size
 N_EPOCHS = 10                # Number of training epochs
 
 # Loss function
-CONTRASTIVE_MARGIN = 2.0     # Margin for contrastive loss
+CONTRASTIVE_MARGIN = 1.0     # Margin for contrastive loss (matching original GLEAMS CNN)
+LOSS_LABEL_CERTAINTY = 0.99  # Confidence in labels (handles noisy/uncertain positive pairs)
 
 # Learning rate scheduler
 SCHEDULER_PATIENCE = 2       # Epochs to wait before reducing LR
@@ -68,7 +69,10 @@ SCHEDULER_VERBOSE = True     # Print LR reduction messages
 # DataLoader Settings
 # =============================================================================
 
-NUM_WORKERS = 0              # Number of data loading workers (0 = single-threaded)
+NUM_WORKERS = 8              # Number of data loading workers (0 = single-threaded)
+                             # 4-8 workers enable parallel data loading while GPU processes batches
+                             # Increase this if GPU utilization is low during training
+                             # Reduce to 0 if you see memory issues or "too many open files" errors
 PIN_MEMORY = True            # Pin memory for faster GPU transfer
 SHUFFLE_TRAIN = True         # Shuffle training data
 SHUFFLE_VAL = False          # Don't shuffle validation data

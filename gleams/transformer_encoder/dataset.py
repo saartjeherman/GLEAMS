@@ -21,7 +21,16 @@ class SpectraDataset(Dataset):
         Args:
             mgf_path: Path to MGF file
             scan_nrs: Optional list of scan numbers to load (if None, loads all)
+            
+        Raises:
+            FileNotFoundError: If MGF file doesn't exist
         """
+        import os
+        
+        # Validate file exists
+        if not os.path.exists(mgf_path):
+            raise FileNotFoundError(f"MGF file not found: {mgf_path}")
+        
         print(f"Loading spectra from {mgf_path}...")
         
         # Warn about compressed file performance
@@ -53,20 +62,28 @@ class SpectraDataset(Dataset):
         requested_scans = set(scan_nrs) if scan_nrs is not None else None
         loaded_count = 0
         
-        for spectrum in tqdm(spectra_generator, desc="Loading spectra", total=total, unit="spectra", file=sys.__stdout__):
-            # Extract only necessary data
-            mz_list.append(spectrum.mz)
-            intensity_list.append(spectrum.intensity)
-            precursor_mz_list.append(spectrum.precursor_mz)
-            precursor_charge_list.append(spectrum.precursor_charge)
-            identifier_list.append(int(spectrum.identifier))
-            
-            # Update max_peaks in single pass
-            max_peaks = max(max_peaks, len(spectrum.mz))
-            
-            loaded_count += 1
-            if requested_scans is not None:
-                requested_scans.discard(int(spectrum.identifier))
+        # Show progress bar if original stdout is a terminal (not redirected/piped)
+        # Write to original stdout to bypass TeeOutput logging
+        show_progress = hasattr(sys.__stdout__, 'isatty') and sys.__stdout__.isatty()
+        
+        try:
+            for spectrum in tqdm(spectra_generator, desc="Loading spectra", total=total, unit="spectra", 
+                                disable=not show_progress, mininterval=0.5, dynamic_ncols=True, file=sys.__stdout__):
+                # Extract only necessary data
+                mz_list.append(spectrum.mz)
+                intensity_list.append(spectrum.intensity)
+                precursor_mz_list.append(spectrum.precursor_mz)
+                precursor_charge_list.append(spectrum.precursor_charge)
+                identifier_list.append(int(spectrum.identifier))
+                
+                # Update max_peaks in single pass
+                max_peaks = max(max_peaks, len(spectrum.mz))
+                
+                loaded_count += 1
+                if requested_scans is not None:
+                    requested_scans.discard(int(spectrum.identifier))
+        except Exception as e:
+            raise RuntimeError(f"Error loading spectra from MGF file: {e}") from e
         
         load_time = time_module.time() - start_time
         
@@ -84,6 +101,10 @@ class SpectraDataset(Dataset):
         
         self.n_spectra = len(mz_list)
         self.max_peaks = max_peaks
+        
+        # Validate that we loaded something
+        if self.n_spectra == 0:
+            raise RuntimeError(f"No spectra loaded from {mgf_path}. File may be empty or corrupted.")
         
         print(f"✓ Loaded {self.n_spectra:,} spectra with max {self.max_peaks} peaks in {load_time/60:.1f} min")
 

@@ -9,13 +9,8 @@ import pandas as pd
 
 from nn import nn_torch as nn
 from metadata import metadata
-import config
+import config  # Old config with dependencies
 
-# Import refactored transformer encoder module
-from transformer_encoder import (
-    parse_args,
-    train_model,
-)
 
 
 # Configuration dictionaries for legacy functions
@@ -105,6 +100,15 @@ def run_gleams_embed(peak_files: List[str], embed_name: str = 'GLEAMS_embed') ->
     logger.info('GLEAMS embedding completed successfully.')
 
 
+# Import refactored transformer encoder module
+from transformer_encoder import (
+    parse_args,
+    train_model,
+)
+from transformer_encoder import config  # New modular config
+
+
+
 def run_preprocessing():
     """Regenerate positive and negative pairs from the updated metadata files."""
     train_file = 'GLEAMS/data/train_metadata.parquet'
@@ -143,6 +147,10 @@ class TeeOutput:
     def flush(self):
         for f in self.files:
             f.flush()
+    
+    def isatty(self):
+        """Return False to indicate this is not a TTY (disables tqdm progress bars)."""
+        return False
 
 
 if __name__ == "__main__":
@@ -151,11 +159,18 @@ if __name__ == "__main__":
     
     # Setup logging to both console and file
     log_file = args.log_txt
-    log_fileobj = open(log_file, 'a')
+    
+    try:
+        log_fileobj = open(log_file, 'a')
+    except IOError as e:
+        print(f"Warning: Could not open log file {log_file}: {e}")
+        print("Continuing without file logging...")
+        log_fileobj = None
     
     # Redirect stdout to both console and file
-    sys.stdout = TeeOutput(sys.__stdout__, log_fileobj)
-    sys.stderr = TeeOutput(sys.__stderr__, log_fileobj)
+    if log_fileobj:
+        sys.stdout = TeeOutput(sys.__stdout__, log_fileobj)
+        sys.stderr = TeeOutput(sys.__stderr__, log_fileobj)
     
     print("="*80)
     print(f"Starting new training run - {time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -166,11 +181,27 @@ if __name__ == "__main__":
     
     try:
         train_model(args)
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Training interrupted by user (Ctrl+C)")
+        sys.exit(1)
+    except FileNotFoundError as e:
+        print(f"\n\n❌ File not found: {e}")
+        print("Please check that all required files exist and paths are correct.")
+        sys.exit(1)
+    except RuntimeError as e:
+        print(f"\n\n❌ Runtime error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n\n❌ Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
     finally:
         # Restore stdout/stderr and close log file
-        sys.stdout = sys.__stdout__
-        sys.stderr = sys.__stderr__
-        log_fileobj.close()
+        if log_fileobj:
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
+            log_fileobj.close()
 
 
 

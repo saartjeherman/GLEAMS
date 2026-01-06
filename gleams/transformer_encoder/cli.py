@@ -72,6 +72,8 @@ def parse_args():
                             help='Weight decay (L2 regularization)')
     train_group.add_argument('--margin', type=float, default=config.CONTRASTIVE_MARGIN,
                             help='Contrastive loss margin')
+    train_group.add_argument('--label-certainty', type=float, default=config.LOSS_LABEL_CERTAINTY,
+                            help='Label certainty for handling noisy labels (0-1)')
     train_group.add_argument('--scheduler-patience', type=int, default=config.SCHEDULER_PATIENCE,
                             help='Patience for learning rate scheduler')
     

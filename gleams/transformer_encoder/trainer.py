@@ -52,8 +52,20 @@ def train_model(args):
     # Load metadata and pairs
     # -----------------------------
     print("Loading metadata files...")
-    train_metadata = pd.read_parquet(train_metadata_file)
-    test_metadata = pd.read_parquet(test_metadata_file)
+    
+    try:
+        train_metadata = pd.read_parquet(train_metadata_file)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Train metadata file not found: {train_metadata_file}")
+    except Exception as e:
+        raise RuntimeError(f"Error loading train metadata: {e}") from e
+    
+    try:
+        test_metadata = pd.read_parquet(test_metadata_file)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Test metadata file not found: {test_metadata_file}")
+    except Exception as e:
+        raise RuntimeError(f"Error loading test metadata: {e}") from e
     
     print(f"Train metadata: {len(train_metadata):,} rows")
     print(f"Test metadata: {len(test_metadata):,} rows")
@@ -66,10 +78,33 @@ def train_model(args):
         )
     
     # Load pairs (these are indices into the metadata DataFrames)
-    train_pos_pairs = np.load(filenames_pairs_pos[0]).astype(int)
-    val_pos_pairs   = np.load(filenames_pairs_pos[1]).astype(int)
-    train_neg_pairs = np.load(filenames_pairs_neg[0]).astype(int)
-    val_neg_pairs   = np.load(filenames_pairs_neg[1]).astype(int)
+    try:
+        train_pos_pairs = np.load(filenames_pairs_pos[0]).astype(int)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Train positive pairs file not found: {filenames_pairs_pos[0]}")
+    except Exception as e:
+        raise RuntimeError(f"Error loading train positive pairs: {e}") from e
+    
+    try:
+        val_pos_pairs = np.load(filenames_pairs_pos[1]).astype(int)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Test positive pairs file not found: {filenames_pairs_pos[1]}")
+    except Exception as e:
+        raise RuntimeError(f"Error loading test positive pairs: {e}") from e
+    
+    try:
+        train_neg_pairs = np.load(filenames_pairs_neg[0]).astype(int)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Train negative pairs file not found: {filenames_pairs_neg[0]}")
+    except Exception as e:
+        raise RuntimeError(f"Error loading train negative pairs: {e}") from e
+    
+    try:
+        val_neg_pairs = np.load(filenames_pairs_neg[1]).astype(int)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Test negative pairs file not found: {filenames_pairs_neg[1]}")
+    except Exception as e:
+        raise RuntimeError(f"Error loading test negative pairs: {e}") from e
     
     print(f"Train pairs: {len(train_pos_pairs):,} positive, {len(train_neg_pairs):,} negative")
     print(f"Val pairs: {len(val_pos_pairs):,} positive, {len(val_neg_pairs):,} negative")
@@ -93,10 +128,18 @@ def train_model(args):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    if device.type == 'cuda':
+        print(f"  GPU: {torch.cuda.get_device_name(0)}")
+        print(f"  Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     encoder = encoder.to(device)
 
     optimizer = optim.Adam(encoder.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-    criterion = ContrastiveLoss(margin=args.margin)
+    criterion = ContrastiveLoss(margin=args.margin, label_certainty=args.label_certainty)
+    
+    # VERIFY: Print the actual loss parameters being used
+    print(f"\n⚠️  IMPORTANT: Using contrastive loss with:")
+    print(f"   Margin: {criterion.margin} (config default: {config.CONTRASTIVE_MARGIN})")
+    print(f"   Label certainty: {criterion.label_certainty} (config default: {config.LOSS_LABEL_CERTAINTY})\n")
     
     # Learning rate scheduler
     scheduler = ReduceLROnPlateau(
@@ -125,7 +168,13 @@ def train_model(args):
     print(f"MGF scan number range: {mgf_scan_numbers.min():,} to {mgf_scan_numbers.max():,}")
     print(f"\nLoading {len(mgf_scan_numbers):,} spectra from MGF file by scan number...")
     
-    base_dataset = SpectraDataset(mgf_path, scan_nrs=mgf_scan_numbers)
+    try:
+        base_dataset = SpectraDataset(mgf_path, scan_nrs=mgf_scan_numbers)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"MGF file not found: {mgf_path}") from e
+    except RuntimeError as e:
+        raise RuntimeError(f"Error loading dataset from MGF file: {e}") from e
+    
     print("✓ Dataset loading complete!")
     print(f"⚠️  Max peaks per spectrum: {base_dataset.max_peaks:,} (affects GPU memory usage)\n")
 
@@ -149,7 +198,12 @@ def train_model(args):
         """Remap pairs from metadata row indices to dataset indices."""
         out = []
         missing = 0
-        for a, b in tqdm(pairs, desc=desc, unit="pairs", disable=len(pairs) > 1000000, file=sys.__stdout__):
+        # Show progress bar if original stdout is a terminal (not redirected/piped)
+        # Write to original stdout to bypass TeeOutput logging
+        show_progress = hasattr(sys.__stdout__, 'isatty') and sys.__stdout__.isatty()
+        for a, b in tqdm(pairs, desc=desc, unit="pairs", 
+                        disable=(not show_progress or len(pairs) > 1000000), 
+                        mininterval=0.5, dynamic_ncols=True, file=sys.__stdout__):
             ia = metadata_idx_to_dataset_idx.get(int(a))
             ib = metadata_idx_to_dataset_idx.get(int(b))
             if ia is None or ib is None:
@@ -191,170 +245,214 @@ def train_model(args):
     os.makedirs(os.path.dirname(log_csv_path), exist_ok=True)
     write_header = not os.path.exists(log_csv_path)
 
-    with open(log_csv_path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=config.LOG_FIELDNAMES)
-        if write_header:
-            writer.writeheader()
+    try:
+        with open(log_csv_path, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=config.LOG_FIELDNAMES)
+            if write_header:
+                writer.writeheader()
 
-        n_epochs = args.n_epochs
-        global_step = 0
-        best_val_loss = float('inf')
-        best_model_path = args.best_model_path
-        final_model_path = args.final_model_path
-        os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+            n_epochs = args.n_epochs
+            global_step = 0
+            best_val_loss = float('inf')
+            best_model_path = args.best_model_path
+            final_model_path = args.final_model_path
+            os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
 
-        for epoch in range(1, n_epochs + 1):
-            encoder.train()
-            epoch_train_loss = 0.0
-            n_train_batches = 0
+            for epoch in range(1, n_epochs + 1):
+                encoder.train()
+                epoch_train_loss = 0.0
+                n_train_batches = 0
 
-            t0 = time.time()
-            
-            batch_pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{n_epochs}", unit="batch", file=sys.__stdout__)
-
-            for batch_idx, batch in enumerate(batch_pbar, start=1):
-                (mz1, int1, pepmass1, charge1), (mz2, int2, pepmass2, charge2), labels = batch
-
-                mz1 = mz1.to(device)
-                int1 = int1.to(device)
-                pepmass1 = pepmass1.to(device)
-                charge1 = charge1.to(device)
-
-                mz2 = mz2.to(device)
-                int2 = int2.to(device)
-                pepmass2 = pepmass2.to(device)
-                charge2 = charge2.to(device)
-
-                labels = labels.to(device)
-
-                emb1_full, _ = encoder(mz1, int1, pepmass=pepmass1, charge=charge1)
-                emb2_full, _ = encoder(mz2, int2, pepmass=pepmass2, charge=charge2)
-
-                emb1 = emb1_full[:, 0, :]
-                emb2 = emb2_full[:, 0, :]
-
-                loss = criterion(emb1, emb2, labels)
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                loss_value = float(loss.item())
-                epoch_train_loss += loss_value
-                n_train_batches += 1
-                global_step += 1
+                t0 = time.time()
                 
-                batch_pbar.set_postfix({'loss': f'{loss_value:.4f}', 'avg_loss': f'{epoch_train_loss/n_train_batches:.4f}'})
+                # Show progress bar if original stdout is a terminal (not redirected/piped)
+                # Write to original stdout to bypass TeeOutput logging
+                show_progress = hasattr(sys.__stdout__, 'isatty') and sys.__stdout__.isatty()
+                batch_pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{n_epochs}", unit="batch", 
+                                disable=not show_progress, mininterval=0.5, dynamic_ncols=True, file=sys.__stdout__)
 
-                if log_batch_level:
-                    writer.writerow({
-                        "timestamp": time.time(),
-                        "epoch": epoch,
-                        "batch": batch_idx,
-                        "split": "train",
-                        "loss": loss_value,
-                        "n_pairs": "",
-                        "batch_size": batch_size,
-                        "dim_model": dim_model,
-                        "n_layers": n_layers,
-                        "n_head": n_head,
-                        "dim_feedforward": dim_feedforward,
-                        "dropout": dropout,
-                        "lr": optimizer.param_groups[0]['lr'],
-                        "margin": criterion.margin
+                for batch_idx, batch in enumerate(batch_pbar, start=1):
+                    (mz1, int1, pepmass1, charge1), (mz2, int2, pepmass2, charge2), labels = batch
+
+                    mz1 = mz1.to(device)
+                    int1 = int1.to(device)
+                    pepmass1 = pepmass1.to(device)
+                    charge1 = charge1.to(device)
+
+                    mz2 = mz2.to(device)
+                    int2 = int2.to(device)
+                    pepmass2 = pepmass2.to(device)
+                    charge2 = charge2.to(device)
+
+                    labels = labels.to(device)
+
+                    emb1_full, _ = encoder(mz1, int1, pepmass=pepmass1, charge=charge1)
+                    emb2_full, _ = encoder(mz2, int2, pepmass=pepmass2, charge=charge2)
+
+                    emb1 = emb1_full[:, 0, :]
+                    emb2 = emb2_full[:, 0, :]
+
+                    loss = criterion(emb1, emb2, labels)
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    loss_value = float(loss.item())
+                    epoch_train_loss += loss_value
+                    n_train_batches += 1
+                    global_step += 1
+                    
+                    # Track embedding distances every 100 batches to debug learning
+                    if batch_idx % 100 == 0:
+                        with torch.no_grad():
+                            distances = torch.nn.functional.pairwise_distance(emb1, emb2)
+                            pos_mask = labels == 1
+                            neg_mask = labels == 0
+                            if pos_mask.any():
+                                pos_dist = distances[pos_mask].mean().item()
+                            else:
+                                pos_dist = float('nan')
+                            if neg_mask.any():
+                                neg_dist = distances[neg_mask].mean().item()
+                            else:
+                                neg_dist = float('nan')
+                    
+                    batch_pbar.set_postfix({
+                        'loss': f'{loss_value:.4f}', 
+                        'avg_loss': f'{epoch_train_loss/n_train_batches:.4f}',
+                        'pos_d': f'{pos_dist:.2f}' if batch_idx % 100 == 0 and not np.isnan(pos_dist) else '',
+                        'neg_d': f'{neg_dist:.2f}' if batch_idx % 100 == 0 and not np.isnan(neg_dist) else ''
                     })
 
-            avg_train_loss = epoch_train_loss / max(n_train_batches, 1)
+                    if log_batch_level:
+                        writer.writerow({
+                            "timestamp": time.time(),
+                            "epoch": epoch,
+                            "batch": batch_idx,
+                            "split": "train",
+                            "loss": loss_value,
+                            "n_pairs": "",
+                            "batch_size": batch_size,
+                            "dim_model": dim_model,
+                            "n_layers": n_layers,
+                            "n_head": n_head,
+                            "dim_feedforward": dim_feedforward,
+                            "dropout": dropout,
+                            "lr": optimizer.param_groups[0]['lr'],
+                            "margin": criterion.margin
+                        })
 
-            # Validation
-            avg_val_loss = evaluate_contrastive(encoder, val_loader, criterion, device)
+                avg_train_loss = epoch_train_loss / max(n_train_batches, 1)
 
-            # Write epoch-level rows
-            writer.writerow({
-                "timestamp": time.time(),
-                "epoch": epoch,
-                "batch": "",
-                "split": "train_epoch",
-                "loss": avg_train_loss,
-                "n_pairs": len(train_pos) + len(train_neg),
-                "batch_size": batch_size,
-                "dim_model": dim_model,
-                "n_layers": n_layers,
-                "n_head": n_head,
-                "dim_feedforward": dim_feedforward,
-                "dropout": dropout,
-                "lr": optimizer.param_groups[0]['lr'],
-                "margin": criterion.margin
-            })
-            
-            writer.writerow({
-                "timestamp": time.time(),
-                "epoch": epoch,
-                "batch": "",
-                "split": "val_epoch",
-                "loss": avg_val_loss,
-                "n_pairs": len(val_pos) + len(val_neg),
-                "batch_size": batch_size,
-                "dim_model": dim_model,
-                "n_layers": n_layers,
-                "n_head": n_head,
-                "dim_feedforward": dim_feedforward,
-                "dropout": dropout,
-                "lr": optimizer.param_groups[0]['lr'],
-                "margin": criterion.margin
-            })
-            f.flush()
+                # Validation
+                avg_val_loss = evaluate_contrastive(encoder, val_loader, criterion, device)
+                
+                # Print training loss for comparison
+                print(f"  Training: avg_loss={avg_train_loss:.4f} over {n_train_batches} batches")
 
-            # Step scheduler
-            scheduler.step(avg_val_loss)
-            current_lr = optimizer.param_groups[0]['lr']
-            
-            # Save best model checkpoint
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': encoder.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
-                    'train_loss': avg_train_loss,
-                    'val_loss': avg_val_loss,
-                    'hyperparameters': {
-                        'dim_model': dim_model,
-                        'n_layers': n_layers,
-                        'n_head': n_head,
-                        'dim_feedforward': dim_feedforward,
-                        'dropout': dropout,
-                        'margin': criterion.margin,
-                    }
-                }, best_model_path)
-                print(f"✓ Saved best model (val_loss={avg_val_loss:.6f}) to {best_model_path}")
-            
-            dt = time.time() - t0
-            print(
-                f"Epoch {epoch}/{n_epochs} | "
-                f"train_loss={avg_train_loss:.6f} | "
-                f"val_loss={avg_val_loss:.6f} | "
-                f"lr={current_lr:.2e} | "
-                f"time={dt:.1f}s"
-            )
+                # Write epoch-level rows
+                writer.writerow({
+                    "timestamp": time.time(),
+                    "epoch": epoch,
+                    "batch": "",
+                    "split": "train_epoch",
+                    "loss": avg_train_loss,
+                    "n_pairs": len(train_pos) + len(train_neg),
+                    "batch_size": batch_size,
+                    "dim_model": dim_model,
+                    "n_layers": n_layers,
+                    "n_head": n_head,
+                    "dim_feedforward": dim_feedforward,
+                    "dropout": dropout,
+                    "lr": optimizer.param_groups[0]['lr'],
+                    "margin": criterion.margin
+                })
+                
+                writer.writerow({
+                    "timestamp": time.time(),
+                    "epoch": epoch,
+                    "batch": "",
+                    "split": "val_epoch",
+                    "loss": avg_val_loss,
+                    "n_pairs": len(val_pos) + len(val_neg),
+                    "batch_size": batch_size,
+                    "dim_model": dim_model,
+                    "n_layers": n_layers,
+                    "n_head": n_head,
+                    "dim_feedforward": dim_feedforward,
+                    "dropout": dropout,
+                    "lr": optimizer.param_groups[0]['lr'],
+                    "margin": criterion.margin
+                })
+                f.flush()
+
+                # Step scheduler
+                scheduler.step(avg_val_loss)
+                current_lr = optimizer.param_groups[0]['lr']
+                
+                # Save best model checkpoint
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    try:
+                        torch.save({
+                            'epoch': epoch,
+                            'model_state_dict': encoder.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                            'scheduler_state_dict': scheduler.state_dict(),
+                            'train_loss': avg_train_loss,
+                            'val_loss': avg_val_loss,
+                            'hyperparameters': {
+                                'dim_model': dim_model,
+                                'n_layers': n_layers,
+                                'n_head': n_head,
+                                'dim_feedforward': dim_feedforward,
+                                'dropout': dropout,
+                                'margin': criterion.margin,
+                            }
+                        }, best_model_path)
+                        print(f"✓ Saved best model (val_loss={avg_val_loss:.6f}) to {best_model_path}")
+                    except Exception as e:
+                        print(f"⚠️  Warning: Failed to save best model: {e}")
+                
+                dt = time.time() - t0
+                print(
+                    f"Epoch {epoch}/{n_epochs} | "
+                    f"train_loss={avg_train_loss:.6f} | "
+                    f"val_loss={avg_val_loss:.6f} | "
+                    f"lr={current_lr:.2e} | "
+                    f"time={dt:.1f}s"
+                )
+
+    except IOError as e:
+        raise IOError(f"Error writing to log file {log_csv_path}: {e}") from e
+    except KeyboardInterrupt:
+        print("\n\n⚠️  Training interrupted by user. Saving current model...")
+        raise
+    except Exception as e:
+        print(f"\n\n❌ Error during training: {e}")
+        raise
 
     # Save final model
-    torch.save({
-        'epoch': n_epochs,
-        'model_state_dict': encoder.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'best_val_loss': best_val_loss,
-        'hyperparameters': {
-            'dim_model': dim_model,
-            'n_layers': n_layers,
-            'n_head': n_head,
-            'dim_feedforward': dim_feedforward,
-            'dropout': dropout,
-            'margin': criterion.margin,
-        }
-    }, final_model_path)
+    try:
+        torch.save({
+            'epoch': n_epochs,
+            'model_state_dict': encoder.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_val_loss': best_val_loss,
+            'hyperparameters': {
+                'dim_model': dim_model,
+                'n_layers': n_layers,
+                'n_head': n_head,
+                'dim_feedforward': dim_feedforward,
+                'dropout': dropout,
+                'margin': criterion.margin,
+            }
+        }, final_model_path)
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to save final model: {e}")
+        print(f"    Best model is still saved at: {best_model_path}")
     
     print(f"\nTraining complete!")
     print(f"Loss log written to: {log_csv_path}")
