@@ -38,10 +38,10 @@ FINAL_MODEL_FILE = 'final_model.pt'
 # =============================================================================
 
 # Transformer encoder dimensions
-DIM_MODEL = 128              # Model embedding dimension (reduced from 256 to match original CNN scale)
+DIM_MODEL = 256              # Model embedding dimension (increased from 64 for more capacity)
 N_HEAD = 4                   # Number of attention heads
 DIM_FEEDFORWARD = 512        # Feedforward network dimension
-N_LAYERS = 2                 # Number of transformer layers
+N_LAYERS = 2                 # Number of transformer layers (increased from 2)
 DROPOUT = 0.1                # Dropout rate for regularization
 
 
@@ -50,13 +50,13 @@ DROPOUT = 0.1                # Dropout rate for regularization
 # =============================================================================
 
 # Optimization
-LEARNING_RATE = 1e-4         # Initial learning rate
+LEARNING_RATE = 1e-4        # Initial learning rate
 WEIGHT_DECAY = 1e-5          # L2 regularization weight
 BATCH_SIZE = 64              # Training batch size
 N_EPOCHS = 10                # Number of training epochs
 
 # Loss function
-CONTRASTIVE_MARGIN = 5.0     # Margin for contrastive loss (scaled for unnormalized embeddings with dim=128)
+CONTRASTIVE_MARGIN = 1.0     # Margin for contrastive loss (scaled for unnormalized embeddings with dim=64)
 LOSS_LABEL_CERTAINTY = 1.0   # Confidence in labels (1.0 = fully certain, <1.0 for noisy labels)
 
 # Learning rate scheduler

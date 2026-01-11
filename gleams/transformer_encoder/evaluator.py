@@ -68,6 +68,7 @@ def evaluate_contrastive(
                 emb1_full, _ = encoder(mz1, int1, pepmass=pepmass1, charge=charge1)
                 emb2_full, _ = encoder(mz2, int2, pepmass=pepmass2, charge=charge2)
 
+                # Use global token (matching training)
                 emb1 = emb1_full[:, 0, :]
                 emb2 = emb2_full[:, 0, :]
 

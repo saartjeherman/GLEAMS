@@ -289,11 +289,12 @@ def train_model(args):
                     emb1_full, _ = encoder(mz1, int1, pepmass=pepmass1, charge=charge1)
                     emb2_full, _ = encoder(mz2, int2, pepmass=pepmass2, charge=charge2)
 
+                    # Use global token (best performance so far)
                     emb1 = emb1_full[:, 0, :]
                     emb2 = emb2_full[:, 0, :]
                     
                     # Debug: Check embedding statistics on first batch
-                    if batch_idx == 0 and epoch == 1:
+                    if batch_idx == 1 and epoch == 1:
                         print(f"\n🔍 Embedding diagnostics (first batch):")
                         print(f"   Embedding shape: {emb1.shape}")
                         print(f"   Emb1 - mean: {emb1.mean():.4f}, std: {emb1.std():.4f}, "
@@ -301,7 +302,39 @@ def train_model(args):
                         print(f"   Emb2 - mean: {emb2.mean():.4f}, std: {emb2.std():.4f}, "
                               f"norm: {torch.norm(emb2, dim=1).mean():.4f}")
                         print(f"   Full output shape: {emb1_full.shape}")
-                        print(f"   Global token (idx 0) used for embeddings\n")
+                        print(f"   Using GLOBAL TOKEN (best performance so far)")
+                        print(f"   Issue: Model not learning discriminative features from peaks")
+                        
+                        # Check cosine similarity for positive vs negative pairs
+                        pos_mask = labels == 1
+                        neg_mask = labels == 0
+                        
+                        if pos_mask.sum() > 0 and neg_mask.sum() > 0:
+                            pos_emb1 = emb1[pos_mask]
+                            pos_emb2 = emb2[pos_mask]
+                            neg_emb1 = emb1[neg_mask]
+                            neg_emb2 = emb2[neg_mask]
+                            
+                            pos_cosine = torch.nn.functional.cosine_similarity(pos_emb1, pos_emb2).mean()
+                            neg_cosine = torch.nn.functional.cosine_similarity(neg_emb1, neg_emb2).mean()
+                            
+                            print(f"\n   Cosine similarity (should differ for pos/neg):")
+                            print(f"   Positive pairs: {pos_cosine:.4f} (should be HIGH ~1.0)")
+                            print(f"   Negative pairs: {neg_cosine:.4f} (should be LOW ~0.0)")
+                            print(f"   Difference: {(pos_cosine - neg_cosine):.4f} (>0.1 is good)")
+                        
+                        # Check if embeddings are diverse (not collapsed to single point)
+                        emb_all = torch.cat([emb1, emb2], dim=0)
+                        pairwise_cosine = torch.mm(
+                            torch.nn.functional.normalize(emb_all, dim=1),
+                            torch.nn.functional.normalize(emb_all, dim=1).T
+                        )
+                        # Exclude diagonal (self-similarity)
+                        off_diagonal = pairwise_cosine[~torch.eye(len(emb_all), dtype=bool, device=device)]
+                        
+                        print(f"\n   Embedding diversity check:")
+                        print(f"   Mean pairwise cosine similarity: {off_diagonal.mean():.4f}")
+                        print(f"   (Should be < 0.5 for diverse embeddings, ~1.0 means collapsed)\n")
 
                     loss = criterion(emb1, emb2, labels)
 
@@ -309,7 +342,7 @@ def train_model(args):
                     loss.backward()
                     
                     # Debug: Check gradients on first batch
-                    if batch_idx == 0 and epoch == 1:
+                    if batch_idx == 1 and epoch == 1:
                         grad_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), float('inf'))
                         print(f"   Gradient norm: {grad_norm:.4f}")
                         # Check if embeddings have gradients

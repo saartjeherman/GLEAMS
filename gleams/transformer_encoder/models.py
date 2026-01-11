@@ -99,7 +99,10 @@ class ContrastiveLoss(nn.Module):
 
     def forward(self, output1: torch.Tensor, output2: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
         """
-        Compute contrastive loss using the GLEAMS ramp function approach.
+        Compute contrastive loss.
+        
+        Using standard contrastive loss (no ramp function) to allow stronger
+        gradients for positive pairs at all distances.
         
         Args:
             output1: Embeddings for first spectrum in pair [batch_size, embedding_dim]
@@ -110,23 +113,17 @@ class ContrastiveLoss(nn.Module):
             Mean contrastive loss
         """
         # Compute Euclidean distance on RAW embeddings (no normalization)
-        # The original GLEAMS CNN does NOT normalize embeddings before computing distance
-        # Normalization forces embeddings onto a unit sphere, causing clustering issues
         euclidean_distance = torch.nn.functional.pairwise_distance(output1, output2)
         
-        # Positive pairs: use ramp function to cap at margin
-        # This forces similar pairs to have distance < margin
-        margin_tensor = torch.tensor(self.margin, device=euclidean_distance.device)
-        ramp_square = torch.pow(torch.minimum(euclidean_distance, margin_tensor), 2)
+        # Standard contrastive loss
+        # Positive pairs: minimize distance² (no capping)
+        pos_loss = label * torch.pow(euclidean_distance, 2)
         
-        # Negative pairs: standard margin-based penalty
-        margin_square = torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
+        # Negative pairs: penalize if distance < margin
+        neg_loss = (1 - label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
         
-        # Combine with label certainty weighting
-        # For positive pairs (label=1): loss = label_certainty * min(distance, margin)²
-        # For negative pairs (label=0): loss = (1 - 0) * max(0, margin - distance)² = full penalty
-        loss = (label * self.label_certainty * ramp_square + 
-                (1 - label * self.label_certainty) * margin_square)
+        # Combine losses
+        loss = pos_loss + neg_loss
         
         # Debug: Print first batch statistics (only once to avoid spam)
         if not hasattr(self, '_debug_printed'):
@@ -136,11 +133,12 @@ class ContrastiveLoss(nn.Module):
                 print(f"\n🔍 Loss function debug (first batch):")
                 print(f"   Margin: {self.margin}, Label certainty: {self.label_certainty}")
                 print(f"   Positive distances: mean={euclidean_distance[pos_mask].mean():.4f}, "
-                      f"loss={loss[pos_mask].mean():.4f}")
+                      f"loss={pos_loss[pos_mask].mean():.4f}")
                 print(f"   Negative distances: mean={euclidean_distance[neg_mask].mean():.4f}, "
-                      f"loss={loss[neg_mask].mean():.4f}")
-                print(f"   Positive weight: {self.label_certainty}")
-                print(f"   Negative weight: 1.0 (full penalty)\n")
+                      f"loss={neg_loss[neg_mask].mean():.4f}")
+                print(f"   Using STANDARD contrastive loss (no ramp function)")
+                print(f"   Positive weight: unlimited (distance²)")
+                print(f"   Negative weight: 1.0 (full penalty if < margin)\n")
             self._debug_printed = True
         
         return loss.mean()
