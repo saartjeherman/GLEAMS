@@ -14,6 +14,7 @@ from pathlib import Path
 # Base directories
 DATA_DIR = Path('GLEAMS/data')
 MODEL_DIR = Path('GLEAMS/models')
+RESULTS_DIR = Path('GLEAMS/results')
 
 # Input data files
 TRAIN_METADATA_FILE = 'train_metadata.parquet'
@@ -50,7 +51,7 @@ DROPOUT = 0.1                # Dropout rate for regularization
 # =============================================================================
 
 # Optimization
-LEARNING_RATE = 1e-4        # Initial learning rate
+LEARNING_RATE = 1e-4        # Initial learning rate (peak LR after warmup)
 WEIGHT_DECAY = 1e-5          # L2 regularization weight
 BATCH_SIZE = 64              # Training batch size
 N_EPOCHS = 10                # Number of training epochs
@@ -59,10 +60,20 @@ N_EPOCHS = 10                # Number of training epochs
 CONTRASTIVE_MARGIN = 1.0     # Margin for contrastive loss (scaled for unnormalized embeddings with dim=64)
 LOSS_LABEL_CERTAINTY = 1.0   # Confidence in labels (1.0 = fully certain, <1.0 for noisy labels)
 
-# Learning rate scheduler
-SCHEDULER_PATIENCE = 2       # Epochs to wait before reducing LR
-SCHEDULER_FACTOR = 0.5       # Factor to reduce LR by
-SCHEDULER_VERBOSE = True     # Print LR reduction messages
+# Learning rate scheduler (CosineWarmupScheduler)
+# The scheduler uses linear warmup followed by cosine decay, which is critical for
+# stable transformer training. During warmup, LR increases from 0 to LEARNING_RATE.
+WARMUP_ITERS = 500           # Number of iterations (steps/batches) for LR warmup
+                             # Typical values: 500-2000 steps
+                             # Should be ~5-10% of total training steps
+COSINE_SCHEDULE_ITERS = 5000 # Total iterations for cosine decay period
+                             # Should approximately equal total_batches * N_EPOCHS
+                             # Example: 200 batches/epoch * 10 epochs = 2000 steps
+                             
+# Legacy scheduler settings (kept for backward compatibility, not used with CosineWarmupScheduler)
+SCHEDULER_PATIENCE = 2       # [LEGACY] Epochs to wait before reducing LR (ReduceLROnPlateau)
+SCHEDULER_FACTOR = 0.5       # [LEGACY] Factor to reduce LR by (ReduceLROnPlateau)
+SCHEDULER_VERBOSE = True     # Print LR updates
 
 
 # =============================================================================
@@ -141,8 +152,15 @@ def get_default_paths(data_dir: Path = None):
     Returns:
         Dictionary with all file paths
     """
+    from datetime import datetime
+    
     if data_dir is None:
         data_dir = DATA_DIR
+    
+    # Generate timestamped log filenames to avoid overwriting between runs
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_csv_filename = f'loss_log_{timestamp_str}.csv'
+    log_txt_filename = f'training_{timestamp_str}.log'
     
     return {
         'train_metadata': str(data_dir / TRAIN_METADATA_FILE),
@@ -152,8 +170,8 @@ def get_default_paths(data_dir: Path = None):
         'train_pairs_neg': str(data_dir / TRAIN_PAIRS_NEG_FILE),
         'test_pairs_pos': str(data_dir / TEST_PAIRS_POS_FILE),
         'test_pairs_neg': str(data_dir / TEST_PAIRS_NEG_FILE),
-        'log_csv': str(data_dir / LOG_CSV_FILE),
-        'log_txt': str(data_dir / LOG_TXT_FILE),
+        'log_csv': str(RESULTS_DIR / log_csv_filename),
+        'log_txt': str(RESULTS_DIR / log_txt_filename),
         'best_model': str(MODEL_DIR / BEST_MODEL_FILE),
         'final_model': str(MODEL_DIR / FINAL_MODEL_FILE),
     }
@@ -178,5 +196,7 @@ def get_training_config():
         'batch_size': BATCH_SIZE,
         'n_epochs': N_EPOCHS,
         'margin': CONTRASTIVE_MARGIN,
-        'scheduler_patience': SCHEDULER_PATIENCE,
+        'warmup_iters': WARMUP_ITERS,
+        'cosine_schedule_iters': COSINE_SCHEDULE_ITERS,
+        'scheduler_patience': SCHEDULER_PATIENCE,  # Legacy, for backward compatibility
     }

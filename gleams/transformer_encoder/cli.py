@@ -74,8 +74,14 @@ def parse_args():
                             help='Contrastive loss margin')
     train_group.add_argument('--label-certainty', type=float, default=config.LOSS_LABEL_CERTAINTY,
                             help='Label certainty for handling noisy labels (0-1)')
+    
+    # Learning rate scheduler (warmup + cosine decay)
+    train_group.add_argument('--warmup-iters', type=int, default=config.WARMUP_ITERS,
+                            help='Number of warmup iterations (steps/batches) for learning rate')
+    train_group.add_argument('--cosine-schedule-iters', type=int, default=config.COSINE_SCHEDULE_ITERS,
+                            help='Number of iterations for cosine decay period')
     train_group.add_argument('--scheduler-patience', type=int, default=config.SCHEDULER_PATIENCE,
-                            help='Patience for learning rate scheduler')
+                            help='[LEGACY] Patience for ReduceLROnPlateau (not used with warmup scheduler)')
     
     # Dataset limits (for debugging)
     debug_group = parser.add_argument_group('Debug options')
@@ -103,8 +109,12 @@ def parse_args():
     if args.mgf_file is None:
         args.mgf_file = str(data_dir / config.MGF_FILE)
     if args.log_csv is None:
-        args.log_csv = str(data_dir / config.LOG_CSV_FILE)
+        from datetime import datetime
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.log_csv = str(config.RESULTS_DIR / f'loss_log_{timestamp_str}.csv')
     if args.log_txt is None:
-        args.log_txt = str(data_dir / config.LOG_TXT_FILE)
+        from datetime import datetime
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.log_txt = str(config.RESULTS_DIR / f'training_{timestamp_str}.log')
     
     return args

@@ -4,18 +4,27 @@ import os
 import sys
 import csv
 import time
+from datetime import datetime
 import torch
 import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 import pandas as pd
 import numpy as np
 from typing import List, Tuple
 from tqdm import tqdm
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for server environments
+import matplotlib.pyplot as plt
 
 from .models import CustomSpectrumTransformerEncoder, ContrastiveLoss
 from .dataset import SpectraDataset
 from .dataloader import create_dataloader
 from .evaluator import evaluate_contrastive
+from .scheduler import CosineWarmupScheduler
+from .visualization import (
+    compute_embedding_distances,
+    plot_embedding_distance_distribution,
+    plot_roc_curve
+)
 from . import config
 
 
@@ -141,14 +150,19 @@ def train_model(args):
     print(f"   Margin: {criterion.margin} (config default: {config.CONTRASTIVE_MARGIN})")
     print(f"   Label certainty: {criterion.label_certainty} (config default: {config.LOSS_LABEL_CERTAINTY})\n")
     
-    # Learning rate scheduler
-    scheduler = ReduceLROnPlateau(
-        optimizer, 
-        mode='min', 
-        factor=config.SCHEDULER_FACTOR, 
-        patience=args.scheduler_patience, 
-        verbose=config.SCHEDULER_VERBOSE
+    # Learning rate scheduler with warmup
+    # CosineWarmupScheduler steps per batch, not per epoch
+    scheduler = CosineWarmupScheduler(
+        optimizer,
+        warmup_iters=args.warmup_iters,
+        cosine_schedule_period_iters=args.cosine_schedule_iters,
     )
+    
+    print(f"📈 Learning rate schedule:")
+    print(f"   Peak LR: {args.learning_rate}")
+    print(f"   Warmup iterations: {args.warmup_iters} batches")
+    print(f"   Cosine decay period: {args.cosine_schedule_iters} batches")
+    print(f"   Note: Scheduler steps after each batch, not epoch\n")
 
     # -----------------------------
     # Build dataset
@@ -262,6 +276,9 @@ def train_model(args):
                 encoder.train()
                 epoch_train_loss = 0.0
                 n_train_batches = 0
+                
+                # Store last batch for visualization
+                last_batch_data = None
 
                 t0 = time.time()
                 
@@ -351,11 +368,21 @@ def train_model(args):
                         print()
                     
                     optimizer.step()
+                    
+                    # Step the scheduler after each batch (warmup + cosine decay)
+                    scheduler.step()
 
                     loss_value = float(loss.item())
                     epoch_train_loss += loss_value
                     n_train_batches += 1
                     global_step += 1
+                    
+                    # Save last batch data for visualization (detach from graph)
+                    last_batch_data = {
+                        'emb1': emb1.detach().cpu(),
+                        'emb2': emb2.detach().cpu(),
+                        'labels': labels.detach().cpu()
+                    }
                     
                     # Track embedding distances every 100 batches to debug learning
                     if batch_idx % 100 == 0:
@@ -448,9 +475,67 @@ def train_model(args):
                 })
                 f.flush()
 
-                # Step scheduler
-                scheduler.step(avg_val_loss)
+                # Current learning rate (scheduler steps after each batch, not here)
                 current_lr = optimizer.param_groups[0]['lr']
+                
+                # ========================================
+                # Create visualization plots for this epoch
+                # ========================================
+                if last_batch_data is not None:
+                    try:
+                        # Create plots directory
+                        plots_dir = os.path.join(os.path.dirname(best_model_path), '..', 'results', 'training_plots')
+                        os.makedirs(plots_dir, exist_ok=True)
+                        
+                        # Generate timestamp for unique filenames
+                        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        
+                        print(f"\n  📊 Creating visualization plots for epoch {epoch} (last training batch)...")
+                        
+                        # Compute embedding distances on last training batch
+                        with torch.no_grad():
+                            emb1_batch = last_batch_data['emb1']
+                            emb2_batch = last_batch_data['emb2']
+                            labels_batch = last_batch_data['labels']
+                            
+                            # Compute distances
+                            distances = torch.nn.functional.pairwise_distance(emb1_batch, emb2_batch).numpy()
+                            labels_np = labels_batch.numpy()
+                            
+                            # Split into positive and negative
+                            positive_distances = distances[labels_np == 1]
+                            negative_distances = distances[labels_np == 0]
+                        
+                        # Create distance distribution plot
+                        fig1, ax1 = plot_embedding_distance_distribution(
+                            positive_distances,
+                            negative_distances,
+                            fdr=0.01,
+                            save_path=os.path.join(plots_dir, f'epoch_{epoch:03d}_{timestamp_str}_distances.png'),
+                            title=f'Epoch {epoch}/{n_epochs} - Last Training Batch\n'
+                                  f'Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, LR: {current_lr:.2e}\n'
+                                  f'Batch: {len(positive_distances)} pos pairs, {len(negative_distances)} neg pairs',
+                            figsize=(12, 7)
+                        )
+                        plt.close(fig1)
+                        
+                        # Create ROC curve
+                        fig2, ax2, auc_score = plot_roc_curve(
+                            positive_distances,
+                            negative_distances,
+                            save_path=os.path.join(plots_dir, f'epoch_{epoch:03d}_{timestamp_str}_roc.png')
+                        )
+                        plt.close(fig2)
+                        
+                        print(f"  ✓ Plots saved to {plots_dir}")
+                        print(f"    - AUC: {auc_score:.4f}")
+                        print(f"    - Positive distance mean: {np.mean(positive_distances):.4f}")
+                        print(f"    - Negative distance mean: {np.mean(negative_distances):.4f}")
+                        
+                    except Exception as e:
+                        print(f"  ⚠️  Warning: Failed to create visualization plots: {e}")
+                        import traceback
+                        traceback.print_exc()
                 
                 # Save best model checkpoint
                 if avg_val_loss < best_val_loss:
