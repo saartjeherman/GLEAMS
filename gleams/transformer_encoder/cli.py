@@ -64,12 +64,16 @@ def parse_args():
     train_group = parser.add_argument_group('Training hyperparameters')
     train_group.add_argument('--batch-size', type=int, default=config.BATCH_SIZE,
                             help='Batch size for training')
+    train_group.add_argument('--gradient-accumulation-steps', type=int, default=config.GRADIENT_ACCUMULATION_STEPS,
+                            help='Accumulate gradients over N steps (effective_batch = batch_size * N)')
     train_group.add_argument('--n-epochs', type=int, default=config.N_EPOCHS,
                             help='Number of training epochs')
     train_group.add_argument('--learning-rate', type=float, default=config.LEARNING_RATE,
                             help='Learning rate')
     train_group.add_argument('--weight-decay', type=float, default=config.WEIGHT_DECAY,
                             help='Weight decay (L2 regularization)')
+    train_group.add_argument('--gradient-clip-norm', type=float, default=config.GRADIENT_CLIP_NORM,
+                            help='Gradient clipping threshold (prevents explosion)')
     train_group.add_argument('--margin', type=float, default=config.CONTRASTIVE_MARGIN,
                             help='Contrastive loss margin')
     train_group.add_argument('--label-certainty', type=float, default=config.LOSS_LABEL_CERTAINTY,

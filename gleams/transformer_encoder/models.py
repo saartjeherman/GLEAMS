@@ -75,13 +75,13 @@ class ContrastiveLoss(nn.Module):
     """
     Contrastive loss for spectrum pair similarity learning.
     
-    Adapted from the original GLEAMS CNN implementation (Hadsell et al. 2006).
-    Uses a ramp function for positive pairs to cap distances at the margin,
-    which forces the model to keep similar pairs within the margin boundary.
+    Uses normalized embeddings with cosine distance to prevent gradient explosion
+    and ensure stable training. Distances are bounded [0, 2] which prevents
+    unlimited positive weight issues.
     
-    Key difference from standard contrastive loss:
-    - Positive pairs: loss = min(distance, margin)² (ramp function)
-    - Negative pairs: loss = max(0, margin - distance)² (standard)
+    Loss formulation:
+    - Positive pairs: minimize cosine distance²
+    - Negative pairs: penalize if cosine distance < margin
     """
     
     def __init__(self, margin: float = None, label_certainty: float = 1.0):
@@ -99,10 +99,7 @@ class ContrastiveLoss(nn.Module):
 
     def forward(self, output1: torch.Tensor, output2: torch.Tensor, label: torch.Tensor) -> torch.Tensor:
         """
-        Compute contrastive loss.
-        
-        Using standard contrastive loss (no ramp function) to allow stronger
-        gradients for positive pairs at all distances.
+        Compute contrastive loss with normalized embeddings.
         
         Args:
             output1: Embeddings for first spectrum in pair [batch_size, embedding_dim]
@@ -112,15 +109,23 @@ class ContrastiveLoss(nn.Module):
         Returns:
             Mean contrastive loss
         """
-        # Compute Euclidean distance on RAW embeddings (no normalization)
-        euclidean_distance = torch.nn.functional.pairwise_distance(output1, output2)
+        # Normalize embeddings to unit sphere (L2 normalization)
+        output1_norm = torch.nn.functional.normalize(output1, p=2, dim=1)
+        output2_norm = torch.nn.functional.normalize(output2, p=2, dim=1)
         
-        # Standard contrastive loss
-        # Positive pairs: minimize distance² (no capping)
-        pos_loss = label * torch.pow(euclidean_distance, 2)
+        # Compute cosine similarity
+        cosine_similarity = (output1_norm * output2_norm).sum(dim=1)
+        
+        # Convert to cosine distance: distance = 1 - similarity
+        # This bounds distances to [0, 2] (prevents explosion)
+        cosine_distance = 1 - cosine_similarity
+        
+        # Contrastive loss with bounded distances
+        # Positive pairs: minimize cosine distance²
+        pos_loss = label * torch.pow(cosine_distance, 2)
         
         # Negative pairs: penalize if distance < margin
-        neg_loss = (1 - label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2)
+        neg_loss = (1 - label) * torch.pow(torch.clamp(self.margin - cosine_distance, min=0.0), 2)
         
         # Combine losses
         loss = pos_loss + neg_loss
@@ -132,13 +137,14 @@ class ContrastiveLoss(nn.Module):
             if pos_mask.any() and neg_mask.any():
                 print(f"\n🔍 Loss function debug (first batch):")
                 print(f"   Margin: {self.margin}, Label certainty: {self.label_certainty}")
-                print(f"   Positive distances: mean={euclidean_distance[pos_mask].mean():.4f}, "
+                print(f"   Positive cosine distances: mean={cosine_distance[pos_mask].mean():.4f}, "
                       f"loss={pos_loss[pos_mask].mean():.4f}")
-                print(f"   Negative distances: mean={euclidean_distance[neg_mask].mean():.4f}, "
+                print(f"   Negative cosine distances: mean={cosine_distance[neg_mask].mean():.4f}, "
                       f"loss={neg_loss[neg_mask].mean():.4f}")
-                print(f"   Using STANDARD contrastive loss (no ramp function)")
-                print(f"   Positive weight: unlimited (distance²)")
-                print(f"   Negative weight: 1.0 (full penalty if < margin)\n")
+                print(f"   Using NORMALIZED embeddings with cosine distance")
+                print(f"   Distance range: [0, 2] (bounded, prevents explosion)")
+                print(f"   Positive weight: distance² (bounded by normalization)")
+                print(f"   Negative weight: clamp(margin - distance)²\n")
             self._debug_printed = True
         
         return loss.mean()

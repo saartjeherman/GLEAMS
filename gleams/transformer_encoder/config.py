@@ -53,11 +53,13 @@ DROPOUT = 0.1                # Dropout rate for regularization
 # Optimization
 LEARNING_RATE = 1e-4        # Initial learning rate (peak LR after warmup)
 WEIGHT_DECAY = 1e-5          # L2 regularization weight
-BATCH_SIZE = 64              # Training batch size
+BATCH_SIZE = 64              # Physical batch size (fits in memory)
+GRADIENT_ACCUMULATION_STEPS = 4  # Accumulate gradients over N steps (effective batch = 64*4=256)
 N_EPOCHS = 10                # Number of training epochs
+GRADIENT_CLIP_NORM = 1.0     # Clip gradients to prevent explosion (recommended: 0.5-2.0)
 
 # Loss function
-CONTRASTIVE_MARGIN = 1.0     # Margin for contrastive loss (scaled for unnormalized embeddings with dim=64)
+CONTRASTIVE_MARGIN = 0.5     # Margin for contrastive loss (reduced for normalized embeddings)
 LOSS_LABEL_CERTAINTY = 1.0   # Confidence in labels (1.0 = fully certain, <1.0 for noisy labels)
 
 # Learning rate scheduler (CosineWarmupScheduler)

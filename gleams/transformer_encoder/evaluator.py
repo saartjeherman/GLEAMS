@@ -11,7 +11,7 @@ def evaluate_contrastive(
     dataloader: DataLoader,
     criterion,
     device: torch.device,
-) -> float:
+) -> tuple:
     """
     Compute mean validation loss over a dataloader.
     
@@ -22,7 +22,8 @@ def evaluate_contrastive(
         device: Device to run evaluation on
         
     Returns:
-        Average validation loss
+        Tuple of (average validation loss, last batch data dict)
+        last_batch_data contains: {'emb1', 'emb2', 'labels'}
     """
     encoder.eval()
     total_loss = 0.0
@@ -34,6 +35,7 @@ def evaluate_contrastive(
     loss_values = []
     distances = []
     labels_all = []
+    last_batch_data = None  # Store last batch for visualization
     
     # Verify model is on correct device
     model_device = next(encoder.parameters()).device
@@ -72,15 +74,27 @@ def evaluate_contrastive(
                 emb1 = emb1_full[:, 0, :]
                 emb2 = emb2_full[:, 0, :]
 
-                # Calculate distances for analysis (no normalization, matching original CNN)
-                euclidean_distance = torch.nn.functional.pairwise_distance(emb1, emb2)
-                distances.extend(euclidean_distance.cpu().numpy().tolist())
+                # Normalize embeddings (same as loss function and training)
+                emb1_norm = torch.nn.functional.normalize(emb1, p=2, dim=1)
+                emb2_norm = torch.nn.functional.normalize(emb2, p=2, dim=1)
+                
+                # Calculate cosine distances for analysis (matching loss function)
+                cosine_similarity = (emb1_norm * emb2_norm).sum(dim=1)
+                cosine_distance = 1 - cosine_similarity
+                distances.extend(cosine_distance.cpu().numpy().tolist())
                 labels_all.extend(labels.cpu().numpy().tolist())
 
                 loss = criterion(emb1, emb2, labels)
                 loss_value = float(loss.item())
                 total_loss += loss_value
                 n_batches += 1
+                
+                # Save last batch data for visualization (detach from graph)
+                last_batch_data = {
+                    'emb1': emb1.detach().cpu(),
+                    'emb2': emb2.detach().cpu(),
+                    'labels': labels.detach().cpu()
+                }
                 
                 # Track min/max for debugging
                 max_loss = max(max_loss, loss_value)
@@ -119,7 +133,7 @@ def evaluate_contrastive(
         print(f"    Negative pairs - Mean: {np.mean(neg_distances):.4f}, Median: {np.median(neg_distances):.4f}")
         print(f"    Expected: Positive distances should be LOW, Negative distances should be HIGH (>margin={criterion.margin})")
         
-        return avg_loss
+        return avg_loss, last_batch_data
     
     except Exception as e:
         raise RuntimeError(f"Error during validation: {e}") from e
