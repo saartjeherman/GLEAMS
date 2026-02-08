@@ -42,9 +42,9 @@ def parse_args():
                              help='Path to loss log CSV file')
     output_group.add_argument('--log-txt', type=str, default=None,
                              help='Path to training log text file')
-    output_group.add_argument('--best-model-path', type=str, default=str(config.MODEL_DIR / config.BEST_MODEL_FILE),
+    output_group.add_argument('--best-model-path', type=str, default=None,
                              help='Path to save best model checkpoint')
-    output_group.add_argument('--final-model-path', type=str, default=str(config.MODEL_DIR / config.FINAL_MODEL_FILE),
+    output_group.add_argument('--final-model-path', type=str, default=None,
                              help='Path to save final model')
     
     # Model architecture
@@ -98,27 +98,31 @@ def parse_args():
     
     # Set default paths if not provided
     data_dir = Path(args.data_dir)
+    
+    # Get default paths with timestamped subdirectory
+    default_paths = config.get_default_paths(data_dir)
+    
     if args.train_metadata is None:
-        args.train_metadata = str(data_dir / config.TRAIN_METADATA_FILE)
+        args.train_metadata = default_paths['train_metadata']
     if args.test_metadata is None:
-        args.test_metadata = str(data_dir / config.TEST_METADATA_FILE)
+        args.test_metadata = default_paths['test_metadata']
     if args.train_pairs_pos is None:
-        args.train_pairs_pos = str(data_dir / config.TRAIN_PAIRS_POS_FILE)
+        args.train_pairs_pos = default_paths['train_pairs_pos']
     if args.train_pairs_neg is None:
-        args.train_pairs_neg = str(data_dir / config.TRAIN_PAIRS_NEG_FILE)
+        args.train_pairs_neg = default_paths['train_pairs_neg']
     if args.test_pairs_pos is None:
-        args.test_pairs_pos = str(data_dir / config.TEST_PAIRS_POS_FILE)
+        args.test_pairs_pos = default_paths['test_pairs_pos']
     if args.test_pairs_neg is None:
-        args.test_pairs_neg = str(data_dir / config.TEST_PAIRS_NEG_FILE)
+        args.test_pairs_neg = default_paths['test_pairs_neg']
     if args.mgf_file is None:
-        args.mgf_file = str(data_dir / config.MGF_FILE)
+        args.mgf_file = default_paths['mgf_file']
     if args.log_csv is None:
-        from datetime import datetime
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.log_csv = str(config.RESULTS_DIR / f'loss_log_{timestamp_str}.csv')
+        args.log_csv = default_paths['log_csv']
     if args.log_txt is None:
-        from datetime import datetime
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        args.log_txt = str(config.RESULTS_DIR / f'training_{timestamp_str}.log')
+        args.log_txt = default_paths['log_txt']
+    if args.best_model_path is None:
+        args.best_model_path = default_paths['best_model']
+    if args.final_model_path is None:
+        args.final_model_path = default_paths['final_model']
     
     return args

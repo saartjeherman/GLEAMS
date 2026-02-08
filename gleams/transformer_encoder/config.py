@@ -51,11 +51,11 @@ DROPOUT = 0.1                # Dropout rate for regularization
 # =============================================================================
 
 # Optimization
-LEARNING_RATE = 1e-4        # Initial learning rate (peak LR after warmup)
+LEARNING_RATE = 5e-5         # Initial learning rate (peak LR after warmup)
 WEIGHT_DECAY = 1e-5          # L2 regularization weight
 BATCH_SIZE = 64              # Physical batch size (fits in memory)
 GRADIENT_ACCUMULATION_STEPS = 4  # Accumulate gradients over N steps (effective batch = 64*4=256)
-N_EPOCHS = 10                # Number of training epochs
+N_EPOCHS = 5                # Number of training epochs
 GRADIENT_CLIP_NORM = 1.0     # Clip gradients to prevent explosion (recommended: 0.5-2.0)
 
 # Loss function
@@ -65,12 +65,12 @@ LOSS_LABEL_CERTAINTY = 1.0   # Confidence in labels (1.0 = fully certain, <1.0 f
 # Learning rate scheduler (CosineWarmupScheduler)
 # The scheduler uses linear warmup followed by cosine decay, which is critical for
 # stable transformer training. During warmup, LR increases from 0 to LEARNING_RATE.
-WARMUP_ITERS = 500           # Number of iterations (steps/batches) for LR warmup
+WARMUP_ITERS = 250           # Number of iterations (steps/batches) for LR warmup
                              # Typical values: 500-2000 steps
                              # Should be ~5-10% of total training steps
-COSINE_SCHEDULE_ITERS = 5000 # Total iterations for cosine decay period
+COSINE_SCHEDULE_ITERS = 2500 # Total iterations for cosine decay period
                              # Should approximately equal total_batches * N_EPOCHS
-                             # Example: 200 batches/epoch * 10 epochs = 2000 steps
+                             # Example: 200 batches/epoch * 5 epochs = 1000 steps
                              
 # Legacy scheduler settings (kept for backward compatibility, not used with CosineWarmupScheduler)
 SCHEDULER_PATIENCE = 2       # [LEGACY] Epochs to wait before reducing LR (ReduceLROnPlateau)
@@ -159,10 +159,9 @@ def get_default_paths(data_dir: Path = None):
     if data_dir is None:
         data_dir = DATA_DIR
     
-    # Generate timestamped log filenames to avoid overwriting between runs
-    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_csv_filename = f'loss_log_{timestamp_str}.csv'
-    log_txt_filename = f'training_{timestamp_str}.log'
+    # Generate timestamped subdirectory for this training run
+    timestamp_str = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    run_dir = RESULTS_DIR / timestamp_str
     
     return {
         'train_metadata': str(data_dir / TRAIN_METADATA_FILE),
@@ -172,10 +171,11 @@ def get_default_paths(data_dir: Path = None):
         'train_pairs_neg': str(data_dir / TRAIN_PAIRS_NEG_FILE),
         'test_pairs_pos': str(data_dir / TEST_PAIRS_POS_FILE),
         'test_pairs_neg': str(data_dir / TEST_PAIRS_NEG_FILE),
-        'log_csv': str(RESULTS_DIR / log_csv_filename),
-        'log_txt': str(RESULTS_DIR / log_txt_filename),
-        'best_model': str(MODEL_DIR / BEST_MODEL_FILE),
-        'final_model': str(MODEL_DIR / FINAL_MODEL_FILE),
+        'log_csv': str(run_dir / LOG_CSV_FILE),
+        'log_txt': str(run_dir / LOG_TXT_FILE),
+        'best_model': str(run_dir / BEST_MODEL_FILE),
+        'final_model': str(run_dir / FINAL_MODEL_FILE),
+        'run_dir': str(run_dir),  # Add run directory path for other outputs
     }
 
 

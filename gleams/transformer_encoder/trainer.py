@@ -276,9 +276,6 @@ def train_model(args):
                 encoder.train()
                 epoch_train_loss = 0.0
                 n_train_batches = 0
-                
-                # Store last batch for visualization
-                last_batch_data = None
 
                 t0 = time.time()
                 
@@ -362,9 +359,6 @@ def train_model(args):
                     if batch_idx == 1 and epoch == 1:
                         grad_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), float('inf'))
                         print(f"   Gradient norm: {grad_norm:.4f}")
-                        # Check if embeddings have gradients
-                        if emb1.grad is not None:
-                            print(f"   Emb1 grad norm: {emb1.grad.norm():.4f}")
                         print()
                     
                     optimizer.step()
@@ -377,14 +371,12 @@ def train_model(args):
                     n_train_batches += 1
                     global_step += 1
                     
-                    # Save last batch data for visualization (detach from graph)
-                    last_batch_data = {
-                        'emb1': emb1.detach().cpu(),
-                        'emb2': emb2.detach().cpu(),
-                        'labels': labels.detach().cpu()
-                    }
+                    # Initialize metrics for progress bar
+                    pos_dist = float('nan')
+                    neg_dist = float('nan')
+                    emb1_norm = float('nan')
                     
-                    # Track embedding distances every 100 batches to debug learning
+                    # Track embedding distances and generate plots every 100 batches
                     if batch_idx % 100 == 0:
                         with torch.no_grad():
                             # Use raw embeddings (no normalization, matching loss function)
@@ -404,6 +396,46 @@ def train_model(args):
                                 neg_dist = distances[neg_mask].mean().item()
                             else:
                                 neg_dist = float('nan')
+                            
+                            # Generate visualization plots
+                            try:
+                                # Get current learning rate from optimizer
+                                batch_lr = optimizer.param_groups[0]['lr']
+                                
+                                # Create plots directory within the run directory
+                                plots_dir = os.path.join(os.path.dirname(best_model_path), 'training_plots')
+                                os.makedirs(plots_dir, exist_ok=True)
+                                
+                                # Compute distances for plotting
+                                distances_np = distances.cpu().numpy()
+                                labels_np = labels.cpu().numpy()
+                                
+                                positive_distances = distances_np[labels_np == 1]
+                                negative_distances = distances_np[labels_np == 0]
+                                
+                                # Create distance distribution plot
+                                fig1, ax1 = plot_embedding_distance_distribution(
+                                    positive_distances,
+                                    negative_distances,
+                                    fdr=0.01,
+                                    save_path=os.path.join(plots_dir, f'epoch_{epoch:03d}_batch_{batch_idx:04d}_distances.png'),
+                                    title=f'Epoch {epoch}/{n_epochs}, Batch {batch_idx}\n'
+                                          f'Avg Train Loss: {epoch_train_loss/n_train_batches:.4f}, LR: {batch_lr:.2e}\n'
+                                          f'Batch: {len(positive_distances)} pos pairs, {len(negative_distances)} neg pairs',
+                                    figsize=(12, 7)
+                                )
+                                plt.close(fig1)
+                                
+                                # Create ROC curve
+                                fig2, ax2, auc_score = plot_roc_curve(
+                                    positive_distances,
+                                    negative_distances,
+                                    save_path=os.path.join(plots_dir, f'epoch_{epoch:03d}_batch_{batch_idx:04d}_roc.png')
+                                )
+                                plt.close(fig2)
+                                
+                            except Exception as e:
+                                print(f"\n  ⚠️  Warning: Failed to create batch plots: {e}")
                     
                     batch_pbar.set_postfix({
                         'loss': f'{loss_value:.4f}', 
@@ -434,10 +466,89 @@ def train_model(args):
                 avg_train_loss = epoch_train_loss / max(n_train_batches, 1)
 
                 # Validation
-                avg_val_loss = evaluate_contrastive(encoder, val_loader, criterion, device)
+                avg_val_loss, _ = evaluate_contrastive(encoder, val_loader, criterion, device)
+                
+                # Current learning rate (scheduler steps after each batch, not here)
+                current_lr = optimizer.param_groups[0]['lr']
                 
                 # Print training loss for comparison
                 print(f"  Training: avg_loss={avg_train_loss:.4f} over {n_train_batches} batches")
+                
+                # ========================================
+                # Generate validation plots for entire validation set
+                # ========================================
+                print(f"\n  📊 Creating validation plots for epoch {epoch} (entire validation set)...")
+                try:
+                    encoder.eval()
+                    all_val_distances = []
+                    all_val_labels = []
+                    
+                    with torch.no_grad():
+                        for val_batch in val_loader:
+                            (mz1_v, int1_v, pepmass1_v, charge1_v), (mz2_v, int2_v, pepmass2_v, charge2_v), labels_v = val_batch
+                            
+                            mz1_v = mz1_v.to(device)
+                            int1_v = int1_v.to(device)
+                            pepmass1_v = pepmass1_v.to(device)
+                            charge1_v = charge1_v.to(device)
+                            mz2_v = mz2_v.to(device)
+                            int2_v = int2_v.to(device)
+                            pepmass2_v = pepmass2_v.to(device)
+                            charge2_v = charge2_v.to(device)
+                            labels_v = labels_v.to(device)
+                            
+                            emb1_v_full, _ = encoder(mz1_v, int1_v, pepmass=pepmass1_v, charge=charge1_v)
+                            emb2_v_full, _ = encoder(mz2_v, int2_v, pepmass=pepmass2_v, charge=charge2_v)
+                            
+                            emb1_v = emb1_v_full[:, 0, :]
+                            emb2_v = emb2_v_full[:, 0, :]
+                            
+                            distances_v = torch.nn.functional.pairwise_distance(emb1_v, emb2_v)
+                            
+                            all_val_distances.append(distances_v.cpu().numpy())
+                            all_val_labels.append(labels_v.cpu().numpy())
+                    
+                    # Concatenate all validation results
+                    all_val_distances = np.concatenate(all_val_distances)
+                    all_val_labels = np.concatenate(all_val_labels)
+                    
+                    positive_distances_val = all_val_distances[all_val_labels == 1]
+                    negative_distances_val = all_val_distances[all_val_labels == 0]
+                    
+                    # Create plots directory
+                    plots_dir = os.path.join(os.path.dirname(best_model_path), 'training_plots')
+                    os.makedirs(plots_dir, exist_ok=True)
+                    
+                    # Create distance distribution plot for validation
+                    fig1_val, ax1_val = plot_embedding_distance_distribution(
+                        positive_distances_val,
+                        negative_distances_val,
+                        fdr=0.01,
+                        save_path=os.path.join(plots_dir, f'epoch_{epoch:03d}_validation_distances.png'),
+                        title=f'Epoch {epoch}/{n_epochs} - VALIDATION SET\n'
+                              f'Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, LR: {current_lr:.2e}\n'
+                              f'Total: {len(positive_distances_val)} pos pairs, {len(negative_distances_val)} neg pairs',
+                        figsize=(12, 7)
+                    )
+                    plt.close(fig1_val)
+                    
+                    # Create ROC curve for validation
+                    fig2_val, ax2_val, auc_score_val = plot_roc_curve(
+                        positive_distances_val,
+                        negative_distances_val,
+                        save_path=os.path.join(plots_dir, f'epoch_{epoch:03d}_validation_roc.png')
+                    )
+                    plt.close(fig2_val)
+                    
+                    print(f"  ✓ Validation plots saved to {plots_dir}")
+                    print(f"    - Validation AUC: {auc_score_val:.4f}")
+                    print(f"    - Validation pos distance mean: {np.mean(positive_distances_val):.4f}")
+                    print(f"    - Validation neg distance mean: {np.mean(negative_distances_val):.4f}")
+                    
+                except Exception as e:
+                    print(f"  ⚠️  Warning: Failed to create validation plots: {e}")
+                    import traceback
+                    traceback.print_exc()
 
                 # Write epoch-level rows
                 writer.writerow({
@@ -475,68 +586,6 @@ def train_model(args):
                 })
                 f.flush()
 
-                # Current learning rate (scheduler steps after each batch, not here)
-                current_lr = optimizer.param_groups[0]['lr']
-                
-                # ========================================
-                # Create visualization plots for this epoch
-                # ========================================
-                if last_batch_data is not None:
-                    try:
-                        # Create plots directory
-                        plots_dir = os.path.join(os.path.dirname(best_model_path), '..', 'results', 'training_plots')
-                        os.makedirs(plots_dir, exist_ok=True)
-                        
-                        # Generate timestamp for unique filenames
-                        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        
-                        print(f"\n  📊 Creating visualization plots for epoch {epoch} (last training batch)...")
-                        
-                        # Compute embedding distances on last training batch
-                        with torch.no_grad():
-                            emb1_batch = last_batch_data['emb1']
-                            emb2_batch = last_batch_data['emb2']
-                            labels_batch = last_batch_data['labels']
-                            
-                            # Compute distances
-                            distances = torch.nn.functional.pairwise_distance(emb1_batch, emb2_batch).numpy()
-                            labels_np = labels_batch.numpy()
-                            
-                            # Split into positive and negative
-                            positive_distances = distances[labels_np == 1]
-                            negative_distances = distances[labels_np == 0]
-                        
-                        # Create distance distribution plot
-                        fig1, ax1 = plot_embedding_distance_distribution(
-                            positive_distances,
-                            negative_distances,
-                            fdr=0.01,
-                            save_path=os.path.join(plots_dir, f'epoch_{epoch:03d}_{timestamp_str}_distances.png'),
-                            title=f'Epoch {epoch}/{n_epochs} - Last Training Batch\n'
-                                  f'Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, LR: {current_lr:.2e}\n'
-                                  f'Batch: {len(positive_distances)} pos pairs, {len(negative_distances)} neg pairs',
-                            figsize=(12, 7)
-                        )
-                        plt.close(fig1)
-                        
-                        # Create ROC curve
-                        fig2, ax2, auc_score = plot_roc_curve(
-                            positive_distances,
-                            negative_distances,
-                            save_path=os.path.join(plots_dir, f'epoch_{epoch:03d}_{timestamp_str}_roc.png')
-                        )
-                        plt.close(fig2)
-                        
-                        print(f"  ✓ Plots saved to {plots_dir}")
-                        print(f"    - AUC: {auc_score:.4f}")
-                        print(f"    - Positive distance mean: {np.mean(positive_distances):.4f}")
-                        print(f"    - Negative distance mean: {np.mean(negative_distances):.4f}")
-                        
-                    except Exception as e:
-                        print(f"  ⚠️  Warning: Failed to create visualization plots: {e}")
-                        import traceback
-                        traceback.print_exc()
-                
                 # Save best model checkpoint
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
