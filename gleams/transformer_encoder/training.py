@@ -7,14 +7,10 @@ import os
 import time
 from typing import List, Optional
 
-import matplotlib
-matplotlib.use('Agg')  # headless backend; safe under stdout-tee + no display
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 import torch.optim as optim
-from scipy.stats import gaussian_kde
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -26,47 +22,7 @@ from spectrum_pairs import (
     collate_pairs,
     preencode_mgf_to_npzs,
 )
-
-
-def _plot_distance_distributions(
-    pos_dist: np.ndarray,
-    neg_dist: np.ndarray,
-    out_path: str,
-    title: str = "",
-) -> None:
-    """Save a KDE plot of positive vs negative embedded distances (Fig. 3-style)."""
-    if len(pos_dist) < 2 and len(neg_dist) < 2:
-        return
-    x_max = max(
-        float(pos_dist.max()) if len(pos_dist) else 1.0,
-        float(neg_dist.max()) if len(neg_dist) else 1.0,
-    )
-    x = np.linspace(0, x_max * 1.05, 400)
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for d, label, color in [
-        (pos_dist, 'Positive pairs', '#a3164e'),
-        (neg_dist, 'Negative pairs', '#7eb6d9'),
-    ]:
-        if len(d) < 2:
-            continue
-        kde = gaussian_kde(d)
-        y = kde(x)
-        ax.fill_between(x, 0, y, alpha=0.5, color=color, label=label)
-        ax.plot(x, y, color=color, linewidth=1.5)
-
-    ax.set_xlabel('Embedded distance')
-    ax.set_ylabel('Density')
-    ax.set_xlim(0, x_max * 1.05)
-    ax.set_ylim(bottom=0)
-    ax.legend(loc='upper right', frameon=False)
-    if title:
-        ax.set_title(title)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=120)
-    plt.close(fig)
+from visualization import plot_distance_distributions, plot_loss_curves
 
 
 def evaluate_contrastive(
@@ -332,7 +288,7 @@ def train_model(run_dir: str):
                 np.concatenate(train_pos_dist_parts) if train_pos_dist_parts else np.array([]))
             train_neg_dist = (
                 np.concatenate(train_neg_dist_parts) if train_neg_dist_parts else np.array([]))
-            _plot_distance_distributions(
+            plot_distance_distributions(
                 train_pos_dist, train_neg_dist,
                 os.path.join(plots_dir, f'train_epoch_{epoch:03d}.png'),
                 title=f'Train — epoch {epoch} (loss={avg_train_loss:.4f})',
@@ -340,7 +296,7 @@ def train_model(run_dir: str):
 
             avg_val_loss, val_pos_dist, val_neg_dist = evaluate_contrastive(
                 encoder, val_loader, criterion, device)
-            _plot_distance_distributions(
+            plot_distance_distributions(
                 val_pos_dist, val_neg_dist,
                 os.path.join(plots_dir, f'val_epoch_{epoch:03d}.png'),
                 title=f'Validation — epoch {epoch} (loss={avg_val_loss:.4f})',
@@ -365,6 +321,14 @@ def train_model(run_dir: str):
                 "lr": optimizer.param_groups[0]['lr'], "margin": criterion.margin,
             })
             f.flush()
+
+            # Refresh the loss-curve plot from the CSV. Overwrites the file each
+            # epoch so opening loss_curves.png acts as a live training monitor.
+            plot_loss_curves(
+                log_csv_path,
+                os.path.join(run_dir, 'loss_curves.png'),
+                title=f'Loss (epoch {epoch}/{n_epochs})',
+            )
 
             scheduler.step(avg_val_loss)
             current_lr = optimizer.param_groups[0]['lr']
