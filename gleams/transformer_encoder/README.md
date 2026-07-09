@@ -69,14 +69,17 @@ train.py ───────► train_model(run_dir)
                      │     ─ drop any pair touching a row not in the MGF
                      │ 5. DataLoader with collate_pairs (pads to longest in batch)
                      │ 6. Build CustomSpectrumTransformerEncoder + ContrastiveLoss
-                     │ 7. For each epoch:
+                     │ 7. For each epoch (up to MAX_EPOCHS):
                      │     ─ train batches, collect distances per pair polarity
                      │     ─ save plots/train_epoch_NNN.png
                      │     ─ run evaluate_contrastive on val set
                      │     ─ save plots/val_epoch_NNN.png
                      │     ─ write per-epoch row to loss_log.csv
+                     │     ─ refresh loss_curves.png
                      │     ─ ReduceLROnPlateau step
                      │     ─ save best_model.pt if val_loss improved
+                     │     ─ track epochs_without_improvement;
+                     │       break if it reaches EARLY_STOPPING_PATIENCE
                      ▼
                   save final_model.pt
 ```
@@ -314,7 +317,8 @@ To force a rebuild: `rm data/train_spectra.npz data/test_spectra.npz` then rerun
 | `DROPOUT` | 0.1 | Lower with more data; higher if val_loss > train_loss diverges |
 | `LEARNING_RATE` | 1e-4 | Lower if loss is unstable; otherwise leave |
 | `MARGIN` | 2.0 | Raise if negatives cluster well below it after long training |
-| `N_EPOCHS` | 10 | 20-50 for serious runs; watch the per-epoch plots |
+| `MAX_EPOCHS` | 30 | Hard ceiling. Training also stops early once val_loss plateaus — see below. |
+| `EARLY_STOPPING_PATIENCE` | 5 | Stop after this many consecutive epochs without val_loss improvement. Set to `None` to disable and always train `MAX_EPOCHS`. |
 | `LR_SCHEDULER_PATIENCE` | 2 | Epochs of no val improvement before LR is halved |
 
 ---

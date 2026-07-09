@@ -57,6 +57,101 @@ def _extract_charge(params: dict) -> int:
     return int(str(chg).rstrip('+'))
 
 
+def build_mgf_offset_index(
+    mgf_path: str,
+    index_path: Optional[str] = None,
+    overwrite: bool = False,
+) -> np.ndarray:
+    """Byte offset of every ``BEGIN IONS`` in the MGF, indexed by spectrum position.
+
+    Position ``i`` — matching the enumerate order of ``mgf.read(use_index=False)``,
+    and therefore the metadata ``scan`` column — begins at byte ``offsets[i]``.
+    Built once by scanning the raw bytes for the block marker (no spectrum
+    parsing, so it's I/O-bound rather than CPU-bound) and cached next to the MGF
+    as ``<mgf>.beginions.npy``, letting later runs seek straight to the spectra
+    they need instead of streaming the whole file.
+    """
+    if index_path is None:
+        index_path = str(mgf_path) + '.beginions.npy'
+    p = Path(index_path)
+    if p.exists() and not overwrite:
+        return np.load(p)
+
+    marker = b'\nBEGIN IONS'
+    keep = len(marker) - 1  # carry these bytes so a marker split across reads is caught
+    offsets: List[int] = []
+    file_size = os.path.getsize(mgf_path)
+    chunk_size = 64 * 1024 * 1024
+
+    with open(mgf_path, 'rb') as f:
+        if f.read(len(b'BEGIN IONS')) == b'BEGIN IONS':
+            offsets.append(0)  # first spectrum is at the very start (no leading '\n')
+        f.seek(0)
+        pbar = tqdm(total=file_size, unit='B', unit_scale=True,
+                    desc='Indexing MGF', mininterval=2.0, smoothing=0.05)
+        carry = b''
+        file_pos = 0  # byte offset of the start of `chunk`
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            buf = carry + chunk
+            base = file_pos - len(carry)
+            i = buf.find(marker)
+            while i != -1:
+                offsets.append(base + i + 1)  # +1: point at 'B', past the '\n'
+                i = buf.find(marker, i + 1)
+            carry = buf[-keep:]
+            file_pos += len(chunk)
+            pbar.update(len(chunk))
+        pbar.close()
+
+    arr = np.asarray(offsets, dtype=np.int64)
+    np.save(p, arr)
+    print(f"[preencode] built MGF offset index: {len(arr):,} spectra -> {p}")
+    return arr
+
+
+def _parse_mgf_block(block: bytes) -> Tuple[np.ndarray, np.ndarray, float, int]:
+    """Parse one ``BEGIN IONS ... END IONS`` block into (mz, intensity, pepmass, charge).
+
+    Mirrors the field extraction of the streaming pyteomics path exactly: peak
+    lines are ``m/z intensity`` pairs cast to float32, PEPMASS takes its first
+    value, and CHARGE drops a trailing '+'. Produces byte-identical arrays to
+    ``mgf.read`` for these fields.
+    """
+    mz_list: List[float] = []
+    int_list: List[float] = []
+    pepmass = 0.0
+    charge = 0
+    for raw in block.split(b'\n'):
+        line = raw.strip()
+        if not line:
+            continue
+        if line[0:1].isdigit():  # peak line: "mz intensity [extra...]"
+            parts = line.split()
+            if len(parts) >= 2:
+                mz_list.append(float(parts[0]))
+                int_list.append(float(parts[1]))
+        elif line[:8] == b'PEPMASS=':
+            tok = line[8:].split()
+            if tok:
+                pepmass = float(tok[0])
+        elif line[:7] == b'CHARGE=':
+            val = line[7:].strip().rstrip(b'+')
+            try:
+                charge = int(val)
+            except ValueError:
+                charge = 0
+        # BEGIN IONS / END IONS / TITLE / RTINSECONDS / SCANS lines are ignored.
+    return (
+        np.asarray(mz_list, dtype=np.float32),
+        np.asarray(int_list, dtype=np.float32),
+        pepmass,
+        charge,
+    )
+
+
 def preencode_mgf_to_npzs(
     mgf_path: str,
     outputs: Sequence[Tuple[pd.DataFrame, str]],
@@ -106,59 +201,44 @@ def preencode_mgf_to_npzs(
         print(f"[preencode] WARNING: {dupes} duplicate scan(s) within a single "
               f"metadata file; later rows are ignored.")
 
-    # Highest enumerate position any metadata row asks for — stop reading the
-    # MGF after we pass it, since nothing further can match.
-    max_scan_needed = max(scan_to_slots) if scan_to_slots else -1
-    print(f"[preencode] highest scan referenced: {max_scan_needed:,}; "
-          f"will stop reading MGF after that.")
-
-    file_size = os.path.getsize(mgf_path)
-    pbar = tqdm(
-        total=file_size, unit='B', unit_scale=True,
-        desc='Parsing MGF', mininterval=2.0, smoothing=0.05,
-    )
-    found = [0] * len(pending)
-
+    # Fetch only the referenced spectra by seeking to their byte offsets, rather
+    # than streaming and parsing the entire multi-hundred-GB MGF. The offset
+    # index is built once and cached next to the MGF, so later runs skip that too.
+    #
     # The bundled MGF has no SCANS= field and per-file `scan:N` values in the
     # TITLE repeat across source files, so they're not unique. The metadata's
-    # `scan` column is the spectrum's enumerate position across the whole MGF.
-    # `use_index=False` matches the call used to generate the metadata, so
-    # iteration order is guaranteed identical.
-    with mgf.read(str(mgf_path), use_index=False) as reader:
-        src = getattr(reader, '_source', None)
-        last_pos = 0
-        for position, spec in enumerate(reader):
-            if position > max_scan_needed:
-                break  # no metadata row references anything past here
+    # `scan` column is the spectrum's enumerate position across the whole MGF,
+    # which is exactly what the offset index is keyed on.
+    offsets = build_mgf_offset_index(mgf_path)
+    n_spectra = len(offsets)
+    file_size = os.path.getsize(mgf_path)
+    found = [0] * len(pending)
 
-            if src is not None:
-                try:
-                    cur_pos = src.tell()
-                    if cur_pos > last_pos:
-                        pbar.update(cur_pos - last_pos)
-                        last_pos = cur_pos
-                except (OSError, AttributeError):
-                    src = None  # stop trying; bar will just stall
+    positions = sorted(pos for pos in scan_to_slots if 0 <= pos < n_spectra)
+    skipped = len(scan_to_slots) - len(positions)
+    if skipped:
+        print(f"[preencode] WARNING: {skipped} referenced position(s) fall "
+              f"outside the {n_spectra:,} spectra in the MGF index; skipped.")
+    print(f"[preencode] seeking {len(positions):,} referenced spectra "
+          f"(of {n_spectra:,} in the MGF).")
 
-            slots = scan_to_slots.get(position)
-            if not slots:
-                continue
-
-            params = spec.get('params', {})
-            mz = np.asarray(spec['m/z array'], dtype=np.float32)
-            it = np.asarray(spec['intensity array'], dtype=np.float32)
-            pep = _extract_pepmass(params)
-            chg = _extract_charge(params)
-            for out_idx, row in slots:
+    pbar = tqdm(total=len(positions), unit='spec', unit_scale=True,
+                desc='Seeking spectra', mininterval=2.0, smoothing=0.05)
+    # Ascending offset order keeps the seeks moving mostly forward.
+    with open(mgf_path, 'rb') as f:
+        for position in positions:
+            start = int(offsets[position])
+            end = (int(offsets[position + 1])
+                   if position + 1 < n_spectra else file_size)
+            f.seek(start)
+            mz, it, pep, chg = _parse_mgf_block(f.read(end - start))
+            for out_idx, row in scan_to_slots[position]:
                 mz_buffers[out_idx][row] = mz
                 int_buffers[out_idx][row] = it
                 pepmasses[out_idx][row] = pep
                 charges[out_idx][row] = chg
                 found[out_idx] += 1
-
-    # Make sure the bar reaches 100% even if `tell()` lagged behind.
-    if pbar.total is not None and pbar.n < pbar.total:
-        pbar.update(pbar.total - pbar.n)
+            pbar.update(1)
     pbar.close()
 
     for out_idx, (_metadata, out_path) in enumerate(pending):

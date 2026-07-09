@@ -1,0 +1,103 @@
+inspect_spectra — 2026-07-06 01:35:11
+
+======================================================================
+1-3. Metadata, grouping by (sequence, charge), replicates
+======================================================================
+Loaded combined metadata: /home/saartje/Desktop/Research/GLEAMS/data/massivekb.parquet
+  columns          : ['scan', 'rtinseconds', 'sequence', 'mz', 'charge']
+  total spectra     : 9,732,868
+  unique sequences  : 1,083,765
+  (sequence,charge) groups           : 1,467,924
+  groups with replicate spectra (>1) : 1,467,924
+  groups that are singletons  (==1)  : 0
+
+  replicate-count distribution (spectra per group):
+      2 spectra/group :  308,713 groups
+      3 spectra/group :  149,361 groups
+      4 spectra/group :   98,880 groups
+      5 spectra/group :   72,498 groups
+      6 spectra/group :   56,553 groups
+      7 spectra/group :   46,042 groups
+      8 spectra/group :   38,877 groups
+      9 spectra/group :   33,279 groups
+     10 spectra/group :  663,721 groups
+
+  spectra per charge:
+    charge 2:  4,664,310 spectra
+    charge 3:  3,739,386 spectra
+    charge 4:  1,111,896 spectra
+    charge 5:    217,276 spectra
+
+======================================================================
+4-5. Train/val split — existing (row-level) vs. peptide-level
+======================================================================
+EXISTING split (prepare_data.py: train_test_split at the ROW level):
+  [existing]
+    train spectra 7,784,884 | val spectra 1,947,984
+    train sequences 867,029 | val sequences 216,736
+    sequences in BOTH        :       0
+    (sequence,charge) in BOTH:       0
+    ^ peptides leak across train/val — the same sequence's replicates
+      land on both sides. This inflates val metrics.
+
+PEPTIDE-LEVEL split (split on sequence — no peptide overlap):
+  [peptide-level]
+    train spectra 7,787,249 | val spectra 1,945,619
+    train sequences 867,012 | val sequences 216,753
+    sequences in BOTH        :       0
+    (sequence,charge) in BOTH:       0
+
+======================================================================
+6-7. Positive & negative pairs
+======================================================================
+EXISTING pair files on disk (from the row-level split):
+
+  [train]  (train_metadata.parquet)
+             pos        neg
+charge                     
+2       14101923  636198335
+3       11127381  315931639
+4        3145746   25179881
+5         563564    1006302
+  TOTAL  pos   28,938,614   neg  978,316,157
+
+  [val (test)]  (test_metadata.parquet)
+            pos       neg
+charge                   
+2       3529912  39414244
+3       2783275  19925778
+4        781748   1544590
+5        142515     61160
+  TOTAL  pos    7,237,450   neg   60,945,772
+
+----------------------------------------------------------------------
+Positive pairs for the PEPTIDE-LEVEL split (computed directly,
+no leakage — same-(sequence,charge) combinations C(n,2)):
+
+  [train]
+charge
+2    14096715
+3    11118501
+4     3144751
+5      564821
+  TOTAL positive pairs:   28,924,788
+
+  [val]
+charge
+2    3509052
+3    2779370
+4     779897
+5     140994
+  TOTAL positive pairs:    7,209,313
+
+----------------------------------------------------------------------
+Negative pairs: generation depends on precursor m/z windows and
+theoretical-fragment overlap (metadata.generate_pairs_negative),
+which is expensive to run here. To materialize them for the
+peptide-level split, write the split parquets (--write-split) and run:
+    from metadata import metadata
+    metadata.generate_pairs_negative(<split>.parquet, config.CHARGES,
+        config.PAIR_MZ_TOLERANCE,
+        config.NEGATIVE_PAIR_FRAGMENT_TOLERANCE,
+        config.NEGATIVE_PAIR_MATCHING_FRAGMENTS_THRESHOLD)
+
