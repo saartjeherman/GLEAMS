@@ -41,12 +41,17 @@ RESULTS_ROOT = '/home/saartje/Desktop/Research/GLEAMS/results'
 # Data loading
 # -----------------------------
 BATCH_SIZE = 128
-NUM_WORKERS = 2
+# Streaming reads peaks from the MGF per item, so more workers = more parallel
+# disk seeks + block parsing. The box has 20 cores; leave headroom for training.
+NUM_WORKERS = 8
 
-# Cap pairs per (split, polarity). Set to None to use the full pair lists.
-# Training fits on train and monitors on test; the val split is a later holdout.
+# Cap pairs *per charge* per polarity (train uses all charges in CHARGES). With
+# the streaming pipeline only the pair list sits in RAM, so this can be large.
+# e.g. 500k * 4 charges * 2 polarities = up to ~4M train pairs (vs the old 200k).
+# NOTE: on CPU-only torch this is impractically slow — install a CUDA build to
+# use the RTX 3080 Ti before scaling up (see the training notes).
 MAX_TRAIN_PAIRS_PER_CLASS = 100000
-MAX_TEST_PAIRS_PER_CLASS  = 20000
+MAX_TEST_PAIRS_PER_CLASS  = 10000
 
 # Keep only the top-K most intense peaks per spectrum (bounds attention cost
 # from outlier spectra). Set to None to keep all peaks.
@@ -72,6 +77,8 @@ WEIGHT_DECAY = 1e-5
 MARGIN = 2.0
 
 # Hard ceiling on training length. Training also stops early — see below.
+# Raised for the larger dataset (each epoch now covers far more, but the model
+# still benefits from more passes to close the gap to the CNN).
 MAX_EPOCHS = 30
 
 # Early stopping: stop training after this many consecutive epochs without an

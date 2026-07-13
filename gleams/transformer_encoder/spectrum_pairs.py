@@ -357,6 +357,101 @@ class SpectrumPairDataset(Dataset):
         )
 
 
+class StreamingSpectrumPairDataset(Dataset):
+    """Contrastive pairs streamed directly from the MGF — no pre-encoded .npz.
+
+    Unlike `SpectrumPairDataset` (which loads a whole peak cache into RAM), this
+    reads each spectrum's peaks on demand by seeking to its byte offset in the
+    MGF. Only the pair list + per-row scalars (scan/pepmass/charge) + the offset
+    index sit in memory, so training scales to millions of pairs / all charges
+    without the whole-dataset-in-RAM ceiling.
+
+    `pos_pairs`/`neg_pairs` are (N, 2) int arrays of metadata row indices; the
+    per-row arrays (`scans`, `pepmass`, `charge`) are aligned to those rows and
+    read straight from the metadata. `scans[row]` is the spectrum's enumerate
+    position in the MGF (what the offset index is keyed on).
+
+    Under DataLoader forking the offset index / metadata arrays are shared
+    copy-on-write; each worker opens its own MGF file handle lazily (a handle
+    open at fork time would share a file offset across workers and corrupt
+    reads), so `_fh` MUST start as None.
+    """
+
+    def __init__(self, mgf_path: str, offset_index_path: str,
+                 scans: np.ndarray, pepmass: np.ndarray, charge: np.ndarray,
+                 pos_pairs: np.ndarray, neg_pairs: np.ndarray,
+                 max_peaks: Optional[int] = None):
+        self.mgf_path = mgf_path
+        # Normal array (not mmap) so Linux fork shares it copy-on-write without
+        # per-worker re-open; ~244 MB for the full MassIVE MGF.
+        self.offsets = np.load(offset_index_path)
+        self.n_spectra = len(self.offsets)
+        self.file_size = os.path.getsize(mgf_path)
+        self.scans = np.asarray(scans, dtype=np.int64)
+        self.pepmass = np.asarray(pepmass, dtype=np.float32)
+        self.charge = np.asarray(charge, dtype=np.int16)
+        self.max_peaks = max_peaks
+
+        pairs = np.vstack([pos_pairs, neg_pairs]).astype(np.int64)
+        labels = np.concatenate([
+            np.ones(len(pos_pairs), dtype=np.float32),
+            np.zeros(len(neg_pairs), dtype=np.float32),
+        ])
+        # Drop pairs whose rows map to an out-of-range scan (defensive; the
+        # per-spectrum emptiness check happens lazily at read time).
+        in_range = (self.scans >= 0) & (self.scans < self.n_spectra)
+        keep = in_range[pairs[:, 0]] & in_range[pairs[:, 1]]
+        dropped = int((~keep).sum())
+        if dropped:
+            print(f"[dataset] dropping {dropped:,} / {len(pairs):,} pairs "
+                  f"with out-of-range scans.")
+        self.pairs = pairs[keep]
+        self.labels = labels[keep]
+        self._fh = None
+        self._pid = None
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def _handle(self):
+        # Reopen when the pid changes so every process (including DataLoader
+        # workers that may have inherited an already-open handle from the parent)
+        # gets its OWN file offset — a shared fd would make concurrent seeks
+        # return garbage bytes spanning spectrum boundaries.
+        pid = os.getpid()
+        if self._fh is None or self._pid != pid:
+            self._fh = open(self.mgf_path, 'rb')
+            self._pid = pid
+        return self._fh
+
+    def _spectrum(self, row: int) -> Tuple[np.ndarray, np.ndarray, float, int]:
+        scan = int(self.scans[row])
+        start = int(self.offsets[scan])
+        end = (int(self.offsets[scan + 1]) if scan + 1 < self.n_spectra
+               else self.file_size)
+        fh = self._handle()
+        fh.seek(start)
+        mz, it, _pep, _chg = _parse_mgf_block(fh.read(end - start))
+        if self.max_peaks is not None and len(mz) > self.max_peaks:
+            top = np.argpartition(it, -self.max_peaks)[-self.max_peaks:]
+            top = top[np.argsort(mz[top])]
+            mz, it = mz[top], it[top]
+        if len(mz) == 0:  # keep collate happy on the rare empty spectrum
+            mz = np.zeros(1, dtype=np.float32)
+            it = np.zeros(1, dtype=np.float32)
+        # Precursor m/z + charge come from the metadata (identical to the MGF
+        # PEPMASS/CHARGE, which prepare_data extracted), not re-parsed here.
+        return mz, it, float(self.pepmass[row]), int(self.charge[row])
+
+    def __getitem__(self, idx: int):
+        r1, r2 = self.pairs[idx]
+        return (
+            self._spectrum(int(r1)),
+            self._spectrum(int(r2)),
+            float(self.labels[idx]),
+        )
+
+
 def _stack_spectra(spec_list):
     mzs, ints, peps, chgs = zip(*spec_list)
     max_len = max(len(m) for m in mzs)

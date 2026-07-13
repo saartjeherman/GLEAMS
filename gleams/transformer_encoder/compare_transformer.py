@@ -26,14 +26,17 @@ from training import _compact_referenced_spectra
 
 # Scoped checkpoint (overridable on the command line).
 DEFAULT_CHECKPOINT = os.path.join(
-    config.RESULTS_ROOT, '2026-05-19_22-44-29', 'best_model.pt')
+    config.RESULTS_ROOT, '2026-07-12_01-06-35', 'best_model.pt')
 
 
 def _load_model(checkpoint: str, device: torch.device):
     ck = torch.load(checkpoint, map_location=device, weights_only=False)
     hp = ck['hyperparameters']
+    # best_model.pt stores the monitor-split loss under 'test_loss'; fall back to
+    # 'val_loss' for older checkpoints that used that key.
+    monitor_loss = ck.get('test_loss', ck.get('val_loss'))
     print(f"[transformer] checkpoint {checkpoint}\n"
-          f"[transformer] epoch={ck.get('epoch')} val_loss={ck.get('val_loss')}\n"
+          f"[transformer] epoch={ck.get('epoch')} loss={monitor_loss}\n"
           f"[transformer] hyperparameters={hp}")
     enc = CustomSpectrumTransformerEncoder(
         d_model=hp['dim_model'], nhead=hp['n_head'],
@@ -43,8 +46,10 @@ def _load_model(checkpoint: str, device: torch.device):
     # source = "<run-folder>/<checkpoint-file>" so the report shows which model.
     source = os.path.join(os.path.basename(os.path.dirname(checkpoint)),
                           os.path.basename(checkpoint))
+    # Keyed 'val_loss' because compare_common._source_str reads that key; the
+    # value is the checkpoint's best monitor-split loss.
     meta = {'label': 'Transformer', 'source': source,
-            'epoch': ck.get('epoch'), 'val_loss': ck.get('val_loss')}
+            'epoch': ck.get('epoch'), 'val_loss': monitor_loss}
     return enc.to(device).eval(), meta
 
 

@@ -19,9 +19,9 @@ import config
 from metrics import ranking_metrics
 from model import ContrastiveLoss, CustomSpectrumTransformerEncoder
 from spectrum_pairs import (
-    SpectrumPairDataset,
+    StreamingSpectrumPairDataset,
+    build_mgf_offset_index,
     collate_pairs,
-    preencode_mgf_to_npzs,
 )
 from visualization import plot_distance_distributions, plot_loss_curves
 
@@ -131,70 +131,83 @@ def train_model(run_dir: str):
             "Metadata must have a 'scan' column to link pairs to MGF positions."
         )
 
-    train_pos_pairs = np.load(config.TRAIN_POS_PAIRS_FILE).astype(int)
-    train_neg_pairs = np.load(config.TRAIN_NEG_PAIRS_FILE).astype(int)
-    test_pos_pairs = np.load(config.TEST_POS_PAIRS_FILE).astype(int)
-    test_neg_pairs = np.load(config.TEST_NEG_PAIRS_FILE).astype(int)
-
-    def _subsample(pairs: np.ndarray, cap: Optional[int], rng: np.random.Generator) -> np.ndarray:
-        if cap is None or len(pairs) <= cap:
-            return pairs
-        idx = rng.choice(len(pairs), cap, replace=False)
-        return pairs[idx]
-
     rng = np.random.default_rng(seed=config.SUBSAMPLE_SEED)
-    train_pos_pairs = _subsample(train_pos_pairs, config.MAX_TRAIN_PAIRS_PER_CLASS, rng)
-    train_neg_pairs = _subsample(train_neg_pairs, config.MAX_TRAIN_PAIRS_PER_CLASS, rng)
-    test_pos_pairs = _subsample(test_pos_pairs, config.MAX_TEST_PAIRS_PER_CLASS, rng)
-    test_neg_pairs = _subsample(test_neg_pairs, config.MAX_TEST_PAIRS_PER_CLASS, rng)
 
-    print(f"Train pairs (after cap): {len(train_pos_pairs):,} positive, "
+    def _load_pairs_all_charges(metadata_file: str, polarity: str,
+                                cap: Optional[int]) -> np.ndarray:
+        """Load + subsample `{metadata}_pairs_{polarity}_{charge}.npy` for every
+        charge in config.CHARGES and concatenate. `cap` is applied *per charge*
+        so all charges are represented rather than swamped by charge 2. Big
+        negative files are memory-mapped so we only materialise the sampled rows,
+        never the whole (multi-GB) array."""
+        base = metadata_file.replace('.parquet', '')
+        parts = []
+        for charge in range(config.CHARGES[0], config.CHARGES[1] + 1):
+            path = f'{base}_pairs_{polarity}_{charge}.npy'
+            if not os.path.isfile(path):
+                print(f"  charge {charge} {polarity}: (missing {os.path.basename(path)}, skipped)")
+                continue
+            mm = np.load(path, mmap_mode='r')
+            n = len(mm)
+            if cap is not None and n > cap:
+                idx = np.sort(rng.choice(n, cap, replace=False))
+                part = np.asarray(mm[idx])
+            else:
+                part = np.asarray(mm)
+            print(f"  charge {charge} {polarity}: {len(part):,} / {n:,} pairs")
+            parts.append(part)
+        if not parts:
+            raise FileNotFoundError(
+                f"No pair files found for {metadata_file} ({polarity}).")
+        return np.vstack(parts).astype(np.int64)
+
+    print("Loading train pairs (all charges in config.CHARGES) ...")
+    train_pos_pairs = _load_pairs_all_charges(
+        config.TRAIN_METADATA_FILE, 'pos', config.MAX_TRAIN_PAIRS_PER_CLASS)
+    train_neg_pairs = _load_pairs_all_charges(
+        config.TRAIN_METADATA_FILE, 'neg', config.MAX_TRAIN_PAIRS_PER_CLASS)
+    print("Loading test (monitor) pairs ...")
+    test_pos_pairs = _load_pairs_all_charges(
+        config.TEST_METADATA_FILE, 'pos', config.MAX_TEST_PAIRS_PER_CLASS)
+    test_neg_pairs = _load_pairs_all_charges(
+        config.TEST_METADATA_FILE, 'neg', config.MAX_TEST_PAIRS_PER_CLASS)
+
+    print(f"Train pairs: {len(train_pos_pairs):,} positive, "
           f"{len(train_neg_pairs):,} negative")
-    print(f"Test pairs (after cap):  {len(test_pos_pairs):,} positive, "
+    print(f"Test pairs:  {len(test_pos_pairs):,} positive, "
           f"{len(test_neg_pairs):,} negative")
 
-    # Restrict encoding to the spectra the subsampled pairs actually reference,
-    # and remap the pair indices onto that compact order. Without this we'd
-    # encode all ~10M spectra (huge RAM + .npz), most of which no pair touches.
-    train_metadata, (train_pos_pairs, train_neg_pairs) = _compact_referenced_spectra(
-        train_metadata, [train_pos_pairs, train_neg_pairs])
-    test_metadata, (test_pos_pairs, test_neg_pairs) = _compact_referenced_spectra(
-        test_metadata, [test_pos_pairs, test_neg_pairs])
-    print(f"Referenced spectra to encode: {len(train_metadata):,} train, "
-          f"{len(test_metadata):,} test (only these are read into the .npz).")
+    # -----------------------------
+    # Streaming datasets + DataLoaders
+    # -----------------------------
+    # Peaks are read from the MGF on demand via the byte-offset index (built once,
+    # cached next to the MGF), so nothing but the pair list + per-row scalars live
+    # in RAM — this is what lets training scale past the old whole-.npz ceiling.
+    offset_index_path = config.MGF_PATH + '.beginions.npy'
+    build_mgf_offset_index(config.MGF_PATH)
 
-    # -----------------------------
-    # Pre-encode MGF → .npz (one pass; cached on disk)
-    # -----------------------------
-    # NOTE: the .npz now holds exactly the spectra referenced by the current
-    # subsampled pairs, so it's tied to MAX_*_PAIRS_PER_CLASS and SUBSAMPLE_SEED.
-    # Delete data/*_spectra.npz if you change those before rerunning.
-    print("Pre-encoding spectra from MGF (one pass, one-time cost)...")
-    preencode_mgf_to_npzs(config.MGF_PATH, [
-        (train_metadata, config.TRAIN_NPZ_PATH),
-        (test_metadata, config.TEST_NPZ_PATH),
-    ])
-
-    # -----------------------------
-    # Datasets + DataLoaders
-    # -----------------------------
-    train_dataset = SpectrumPairDataset(
-        config.TRAIN_NPZ_PATH, train_pos_pairs, train_neg_pairs,
-        max_peaks=config.MAX_PEAKS)
-    test_dataset = SpectrumPairDataset(
-        config.TEST_NPZ_PATH, test_pos_pairs, test_neg_pairs,
-        max_peaks=config.MAX_PEAKS)
+    train_dataset = StreamingSpectrumPairDataset(
+        config.MGF_PATH, offset_index_path,
+        train_metadata['scan'].to_numpy(), train_metadata['mz'].to_numpy(),
+        train_metadata['charge'].to_numpy(),
+        train_pos_pairs, train_neg_pairs, max_peaks=config.MAX_PEAKS)
+    test_dataset = StreamingSpectrumPairDataset(
+        config.MGF_PATH, offset_index_path,
+        test_metadata['scan'].to_numpy(), test_metadata['mz'].to_numpy(),
+        test_metadata['charge'].to_numpy(),
+        test_pos_pairs, test_neg_pairs, max_peaks=config.MAX_PEAKS)
     print(f"Train dataset: {len(train_dataset):,} pairs")
     print(f"Test dataset:  {len(test_dataset):,} pairs")
 
+    persist = config.NUM_WORKERS > 0
     train_loader = DataLoader(
         train_dataset, batch_size=config.BATCH_SIZE, shuffle=True,
-        collate_fn=collate_pairs, num_workers=config.NUM_WORKERS, pin_memory=True,
-    )
+        collate_fn=collate_pairs, num_workers=config.NUM_WORKERS,
+        pin_memory=True, persistent_workers=persist)
     test_loader = DataLoader(
         test_dataset, batch_size=config.BATCH_SIZE, shuffle=False,
-        collate_fn=collate_pairs, num_workers=config.NUM_WORKERS, pin_memory=True,
-    )
+        collate_fn=collate_pairs, num_workers=config.NUM_WORKERS,
+        pin_memory=True, persistent_workers=persist)
 
     # -----------------------------
     # Model
